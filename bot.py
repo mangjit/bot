@@ -140,6 +140,7 @@ def main():
         sys.exit(1)
 
     iterations = 0
+    peak_pnl = 0.0  # highest cumulative profit reached (drives the growing risk budget)
     log.info("Running. Ctrl-C to stop.")
     try:
         while True:
@@ -153,14 +154,19 @@ def main():
 
             px = client.price(instr)
 
+            # Compounding risk budget: $1 + peak profit, capped at MAX_LOSS.
+            peak_pnl = max(peak_pnl, pnl)
+            risk_budget = min(config.STARTING_BALANCE + max(peak_pnl, 0.0), config.MAX_LOSS)
+
             # --- cumulative stop conditions ---------------------------------
             if pnl >= config.PROFIT_TARGET:
-                log.info(f"CUMULATIVE TARGET HIT: net P&L ${pnl:.4f} (+{pl_pct:.2f}% of ${config.STARTING_BALANCE}). Closing and stopping.")
+                log.info(f"PROFIT TARGET HIT: banked ${pnl:.4f} (peak ${peak_pnl:.4f}). Closing and stopping.")
                 _close_all(client, instr)
                 write_state(running=False, reason="profit-target", exit_pnl=round(pnl, 4))
                 break
-            if pnl <= -config.MAX_LOSS:
-                log.info(f"CUMULATIVE LOSS CAP HIT: net P&L ${pnl:.4f} ({pl_pct:.2f}%). Closing and stopping.")
+            if pnl <= -risk_budget:
+                log.info(f"LOSS CAP HIT: net P&L ${pnl:.4f} reached the growing "
+                         f"risk budget (-${risk_budget:.2f}, peak profit ${peak_pnl:.2f}). Closing and stopping.")
                 _close_all(client, instr)
                 write_state(running=False, reason="loss-cap", exit_pnl=round(pnl, 4))
                 break
@@ -188,6 +194,10 @@ def main():
                 equity=round(equity, 4),
                 pnl=round(pnl, 4),
                 pnl_pct=round(pl_pct, 2),
+                peak_pnl=round(peak_pnl, 4),
+                risk_budget=round(risk_budget, 4),
+                target=config.PROFIT_TARGET,
+                max_loss=config.MAX_LOSS,
                 iterations=iterations,
                 legs=legs_state,
             )
@@ -198,7 +208,8 @@ def main():
                 legs_txt = (f"long_pl={legs_state['long']['pl']:+.2f} "
                             f"short_pl={legs_state['short']['pl']:+.2f}")
             log.info(f"[{iterations}] mid={px['mid']:.5f} equity=${equity:.4f} "
-                     f"P&L=${pnl:+.4f} ({pl_pct:+.2f}%) | {legs_txt}")
+                     f"P&L=${pnl:+.4f} ({pl_pct:+.2f}%) | budget(risk)=${risk_budget:.2f} "
+                     f"peak=${peak_pnl:.2f} | {legs_txt}")
 
             time.sleep(config.POLL_INTERVAL)
 

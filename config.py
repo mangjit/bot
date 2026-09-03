@@ -39,17 +39,13 @@ class Config:
     # ---- Instrument -------------------------------------------------------
     INSTRUMENT: str = _env("OANDA_INSTRUMENT", "EUR_USD")
 
-    # ---- The "$1" test config --------------------------------------------
-    # The bot treats the account as having a $1 "risk budget". It records the
-    # opening balance and stops if P&L falls to or below the loss cap.
-    STARTING_BALANCE: float = float(_env("STARTING_BALANCE", "1.00"))
-    # ---- Cumulative stop limits -------------------------------------------
-    # Stop the bot once net P&L (realized + unrealized, measured from the
-    # opening balance) reaches EITHER of these, whichever comes first.
-    # MAX_LOSS   -> stop if cumulative LOSS >= this (stop-out safety)
-    # PROFIT_TARGET -> stop if cumulative PROFIT >= this (take-profit)
-    MAX_LOSS: float = float(_env("MAX_LOSS", "100.00"))
-    PROFIT_TARGET: float = float(_env("PROFIT_TARGET", "100.00"))
+    # ---- Risk budget (compounding) ----------------------------------------
+    # The bot starts RISKING $1. As it banks profit, the amount it is willing
+    # to risk grows ("budget = $1 + peak profit"), capped at MAX_RISK. If it
+    # gives back the whole current budget (drawdown), it stops and closes.
+    STARTING_BALANCE: float = float(_env("STARTING_BALANCE", "1.00"))  # initial risk budget
+    MAX_LOSS: float = float(_env("MAX_LOSS", "100.00"))   # cap on the growing risk budget
+    PROFIT_TARGET: float = float(_env("PROFIT_TARGET", "100.00"))  # stop after banking this much profit
 
     # ---- Order placement --------------------------------------------------
     # Distance (pips) above / below the market price for the two legs.
