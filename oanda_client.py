@@ -40,7 +40,9 @@ class OandaClient:
 
     # ---- account ----------------------------------------------------------
     def account_summary(self) -> dict:
-        return self._request("GET", "/summary")
+        # The /summary endpoint wraps fields inside an "account" object:
+        #   {"account": {"balance": ..., "unrealizedPL": ..., ...}}
+        return self._request("GET", "/summary")["account"]
 
     # ---- pricing ----------------------------------------------------------
     def price(self, instrument: str) -> dict:
