@@ -117,18 +117,24 @@ def main():
     px = client.price(instr)
     log.info(f"Initial price: bid={px['bid']:.5f} ask={px['ask']:.5f}")
 
-    # --- seed the two legs --------------------------------------------------
+    # --- seed the entry ----------------------------------------------------
     if config.ENTRY_MODE == "hedge":
-        # Open both at market (hedged). Real offset is applied on re-arm only.
+        # NOTE: requires a HEDGING account; on a netting account the two
+        # opposite orders cancel to zero. See README.
         client.market_order(instr, +config.UNITS)
         client.market_order(instr, -config.UNITS)
-        log.info(f"Opened hedge: BUY {config.UNITS} + SELL {config.UNITS}")
+        log.info(f"Opened hedge: BUY {config.UNITS} + SELL {config.UNITS} "
+                 f"(requires hedging account)")
+        _cancel_pending(client, instr)  # clear any leftover pending orders
     elif config.ENTRY_MODE == "straddle":
+        # Breakout entry: BUY STOP above, SELL STOP below. One will fill.
+        _cancel_pending(client, instr)
         up = round(px["mid"] + config.OFFSET_PIPS * pip, 5)
         dn = round(px["mid"] - config.OFFSET_PIPS * pip, 5)
         client.stop_order(instr, +config.UNITS, str(up), "STOP")
         client.stop_order(instr, -config.UNITS, str(dn), "STOP")
-        log.info(f"Placed straddle: BUY STOP @{up} / SELL STOP @{dn}")
+        log.info(f"Placed breakout straddle: BUY STOP @{up} / SELL STOP @{dn}. "
+                 f"Waiting for breakout...")
     else:
         log.error(f"Unknown ENTRY_MODE {config.ENTRY_MODE}")
         sys.exit(1)
@@ -146,7 +152,6 @@ def main():
             pl_pct = (pnl / config.STARTING_BALANCE) * 100.0 if config.STARTING_BALANCE else 0
 
             px = client.price(instr)
-            legs = get_legs(client, instr)
 
             # --- cumulative stop conditions ---------------------------------
             if pnl >= config.PROFIT_TARGET:
@@ -165,54 +170,15 @@ def main():
                 write_state(running=False, reason="max-iterations", exit_pnl=round(pnl, 4))
                 break
 
-            head = (f"[{iterations}] mid={px['mid']:.5f} equity=${equity:.4f} "
-                    f"P&L=${pnl:+.4f} ({pl_pct:+.2f}%) | "
-                    f"long_pl={legs['long']['pl']:+.2f} short_pl={legs['short']['pl']:+.2f} "
-                    if legs else f"[{iterations}] mid={px['mid']:.5f} equity=${equity:.4f} P&L=${pnl:+.4f} | no net position ")
+            if config.ENTRY_MODE == "straddle":
+                _run_straddle_tick(client, instr, px, pip)
+            else:
+                _run_hedge_tick(client, instr, px, pip)
 
-            # --- flip decision (hedge mode) ---------------------------------
-            if legs and config.ENTRY_MODE == "hedge":
-                # Only consider legs that actually hold a position.
-                long_units = abs(legs["long"]["units"])
-                short_units = abs(legs["short"]["units"])
-
-                long_pips = pnl_in_pips(client, instr, "long", legs["long"]["entry"], pip) if long_units else 0.0
-                short_pips = pnl_in_pips(client, instr, "short", legs["short"]["entry"], pip) if short_units else 0.0
-                if long_units and short_units:
-                    head += f"long_pips={long_pips:+.1f} short_pips={short_pips:+.1f}"
-
-                # The losing side is the one whose pip P&L is more negative.
-                # Ignore a side with no position so we don't flip into nothing.
-                candidates = []
-                if long_units:
-                    candidates.append(("long", long_pips))
-                if short_units:
-                    candidates.append(("short", short_pips))
-
-                if len(candidates) == 2:
-                    losing_side, losing_pips = min(candidates, key=lambda c: c[1])
-                else:
-                    losing_side, losing_pips = candidates[0]
-
-                if losing_pips <= -config.MIN_POSITION_SHIFT:
-                    log.info(f"  FLIP: {losing_side} is losing ({losing_pips:+.1f}p). "
-                             f"Closing losing {losing_side} and re-opening it at market.")
-                    client.close_position(instr, "long" if losing_side == "long" else "short")
-                    if losing_side == "long":
-                        client.market_order(instr, +config.UNITS)
-                    else:
-                        client.market_order(instr, -config.UNITS)
-                    FLIPS.append({
-                        "time": datetime.now().strftime("%H:%M:%S"),
-                        "side": losing_side,
-                        "price": px["mid"],
-                        "pips": round(losing_pips, 1),
-                    })
-                    head += "  ^FLIPPED"
-
-            # Write results for the web dashboard.
+            # Update legs state for the dashboard.
+            legs = get_legs(client, instr)
             legs_state = None
-            if legs:
+            if legs and (abs(legs["long"]["units"]) or abs(legs["short"]["units"])):
                 legs_state = {
                     "long": {"pl": legs["long"]["pl"], "entry": legs["long"]["entry"]},
                     "short": {"pl": legs["short"]["pl"], "entry": legs["short"]["entry"]},
@@ -226,12 +192,20 @@ def main():
                 legs=legs_state,
             )
 
-            log.info(head if config.VERBOSE else head.split("|")[0])
+            # Brief log line.
+            legs_txt = "no open position"
+            if legs_state:
+                legs_txt = (f"long_pl={legs_state['long']['pl']:+.2f} "
+                            f"short_pl={legs_state['short']['pl']:+.2f}")
+            log.info(f"[{iterations}] mid={px['mid']:.5f} equity=${equity:.4f} "
+                     f"P&L=${pnl:+.4f} ({pl_pct:+.2f}%) | {legs_txt}")
+
             time.sleep(config.POLL_INTERVAL)
 
     except KeyboardInterrupt:
         log.info("Stopped by user. Closing positions.")
         try:
+            _cancel_pending(client, instr)
             _close_all(client, instr)
         except Exception as e:
             log.error(f"Could not close: {e}")
@@ -239,10 +213,97 @@ def main():
     except Exception as e:
         log.exception(f"Fatal error: {e}")
         try:
+            _cancel_pending(client, instr)
             _close_all(client, instr)
         except Exception:
             pass
         sys.exit(1)
+
+
+def _cancel_pending(client, instrument):
+    """Cancel any open (unfilled) pending STOP orders on the instrument."""
+    try:
+        orders = client._request("GET", "/pendingOrders").get("orders", [])
+        for o in orders:
+            if o.get("instrument") == instrument:
+                client.cancel_order(o["id"])
+                log.info(f"Cancelled pending order {o['id']} ({o['type']} @ {o.get('price')})")
+    except Exception as e:
+        log.warning(f"_cancel_pending error: {e}")
+
+
+def _run_straddle_tick(client, instr, px, pip):
+    """Breakout / single-direction flip logic (works on netting accounts).
+
+    After a breakout fills one side, cancel the other. Then, if the open
+    position starts LOSING past MIN_POSITION_SHIFT pips, close it and flip to
+    the opposite direction at market (follow the move)."""
+    trades = [t for t in client.open_trades() if t["instrument"] == instr]
+    if not trades:
+        return  # still waiting for a breakout to fill a pending order
+
+    # Take the open trade (only one on a netting account).
+    t = trades[0]
+    units = int(t["currentUnits"])
+    entry = float(t["price"])
+    side = "long" if units > 0 else "short"
+    pips = (px["bid"] - entry) / pip if side == "long" else (entry - px["ask"]) / pip
+
+    if pips <= -config.MIN_POSITION_SHIFT:
+        # Flip: close current losing position, open opposite at market.
+        log.info(f"  FLIP: {side} is losing ({pips:+.1f}p @ {px['mid']:.5f}). "
+                 f"Closing and going opposite at market.")
+        if side == "long":
+            client.close_position(instr, "long", "ALL")
+            client.market_order(instr, -config.UNITS)
+        else:
+            client.close_position(instr, "short", "ALL")
+            client.market_order(instr, +config.UNITS)
+        FLIPS.append({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "side": "short" if side == "long" else "long",
+            "price": px["mid"],
+            "pips": round(pips, 1),
+        })
+
+
+def _run_hedge_tick(client, instr, px, pip):
+    """Hedge-and-flip logic (requires a HEDGING account)."""
+    legs = get_legs(client, instr)
+    if not legs:
+        return
+    long_units = abs(legs["long"]["units"])
+    short_units = abs(legs["short"]["units"])
+    long_pips = pnl_in_pips(client, instr, "long", legs["long"]["entry"], pip) if long_units else 0.0
+    short_pips = pnl_in_pips(client, instr, "short", legs["short"]["entry"], pip) if short_units else 0.0
+
+    candidates = []
+    if long_units:
+        candidates.append(("long", long_pips))
+    if short_units:
+        candidates.append(("short", short_pips))
+    if not candidates:
+        return
+
+    if len(candidates) == 2:
+        losing_side, losing_pips = min(candidates, key=lambda c: c[1])
+    else:
+        losing_side, losing_pips = candidates[0]
+
+    if losing_pips <= -config.MIN_POSITION_SHIFT:
+        log.info(f"  FLIP: {losing_side} is losing ({losing_pips:+.1f}p). "
+                 f"Closing losing {losing_side} and re-opening it at market.")
+        client.close_position(instr, "long" if losing_side == "long" else "short")
+        if losing_side == "long":
+            client.market_order(instr, +config.UNITS)
+        else:
+            client.market_order(instr, -config.UNITS)
+        FLIPS.append({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "side": losing_side,
+            "price": px["mid"],
+            "pips": round(losing_pips, 1),
+        })
 
 
 def _close_all(client, instrument):

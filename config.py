@@ -58,9 +58,12 @@ class Config:
     UNITS: int = int(_env("UNITS", "1000"))
 
     # Entry mode:
-    #   "hedge"    -> open BOTH a BUY and a SELL at market (hedged), then flip.
-    #   "straddle" -> place a BUY STOP and SELL STOP above/below price (breakout entry).
-    ENTRY_MODE: str = _env("ENTRY_MODE", "hedge")
+    #   "straddle" -> place a BUY STOP above and SELL STOP below price (breakout
+    #                 entry). On a NETTING account (the default OANDA demo) this
+    #                 is the mode that WORKS - it trades one direction at a time.
+    #   "hedge"    -> open BOTH a BUY and a SELL at market (hedged). Requires a
+    #                 HEDGING account; on a netting account they cancel to zero.
+    ENTRY_MODE: str = _env("ENTRY_MODE", "straddle")
 
     # ---- Control loop -----------------------------------------------------
     POLL_INTERVAL: float = float(_env("POLL_INTERVAL", "5"))      # seconds between checks
