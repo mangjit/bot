@@ -65,7 +65,6 @@ class OandaClient:
                 "type": "MARKET",
                 "instrument": instrument,
                 "units": str(units),
-                "timeInForce": "FTC",
                 "positionFill": "DEFAULT",
             }
         }
