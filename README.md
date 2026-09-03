@@ -101,17 +101,3 @@ point `OANDA_ENV=trade` at a live account.
 - On a demo account OANDA allows fractional units, so tiny sizes work. On live
   accounts minimum trade size applies (check the pair's contract specs).
 - Never share your API token. It grants access to your account.
-
----
-
-## Google Cloud (Compute Engine) — quick start
-
-1. On a fresh Ubuntu VM: `git clone https://github.com/mangjit/bot.git && cd bot`
-2. `bash setup_gcp.sh` (installs deps + a `flip-bot` systemd service + a `.env`)
-3. `nano .env` → paste your `OANDA_API_TOKEN` and `OANDA_ACCOUNT_ID`
-4. `source .env`
-5. `sudo systemctl start flip-bot` (bot auto-starts, auto-restarts, survives reboots)
-6. Watch: `journalctl -u flip-bot -f`
-7. Dashboard: `python3 app.py` → open tcp:5000 in the firewall → `http://<VM-IP>:5000`
-
-> Cloud Shell alternative for a quick test: `python3 app.py`, then use Web preview → port 5000.

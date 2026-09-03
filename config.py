@@ -43,8 +43,13 @@ class Config:
     # The bot treats the account as having a $1 "risk budget". It records the
     # opening balance and stops if P&L falls to or below the loss cap.
     STARTING_BALANCE: float = float(_env("STARTING_BALANCE", "1.00"))
-    MAX_LOSS: float = float(_env("MAX_LOSS", "1.00"))     # stop if net loss >= this
-    PROFIT_TARGET: float = float(_env("PROFIT_TARGET", "0.25"))  # stop if net profit >= this
+    # ---- Cumulative stop limits -------------------------------------------
+    # Stop the bot once net P&L (realized + unrealized, measured from the
+    # opening balance) reaches EITHER of these, whichever comes first.
+    # MAX_LOSS   -> stop if cumulative LOSS >= this (stop-out safety)
+    # PROFIT_TARGET -> stop if cumulative PROFIT >= this (take-profit)
+    MAX_LOSS: float = float(_env("MAX_LOSS", "100.00"))
+    PROFIT_TARGET: float = float(_env("PROFIT_TARGET", "100.00"))
 
     # ---- Order placement --------------------------------------------------
     # Distance (pips) above / below the market price for the two legs.

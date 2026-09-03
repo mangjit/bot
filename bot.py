@@ -138,14 +138,14 @@ def main():
             px = client.price(instr)
             legs = get_legs(client, instr)
 
-            # --- stop conditions -------------------------------------------
+            # --- cumulative stop conditions ---------------------------------
             if pnl >= config.PROFIT_TARGET:
-                log.info(f"TARGET HIT: net P&L ${pnl:.4f} (+{pl_pct:.2f}% of ${config.STARTING_BALANCE}). Closing and stopping.")
+                log.info(f"CUMULATIVE TARGET HIT: net P&L ${pnl:.4f} (+{pl_pct:.2f}% of ${config.STARTING_BALANCE}). Closing and stopping.")
                 _close_all(client, instr)
-                write_state(running=False, reason="target-hit", exit_pnl=round(pnl, 4))
+                write_state(running=False, reason="profit-target", exit_pnl=round(pnl, 4))
                 break
             if pnl <= -config.MAX_LOSS:
-                log.info(f"LOSS CAP HIT: net P&L ${pnl:.4f} ({pl_pct:.2f}%). Closing and stopping.")
+                log.info(f"CUMULATIVE LOSS CAP HIT: net P&L ${pnl:.4f} ({pl_pct:.2f}%). Closing and stopping.")
                 _close_all(client, instr)
                 write_state(running=False, reason="loss-cap", exit_pnl=round(pnl, 4))
                 break
