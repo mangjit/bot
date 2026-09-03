@@ -92,6 +92,12 @@ class OandaClient:
         data = self._request("GET", "/openPositions")
         return data.get("positions", [])
 
+    def open_trades(self) -> list:
+        """All currently-open trades (includes BOTH legs of a hedge even when
+        they net to zero, which /openPositions hides)."""
+        data = self._request("GET", "/openTrades")
+        return data.get("trades", [])
+
     def position(self, instrument: str) -> dict | None:
         for p in self.open_positions():
             if p["instrument"] == instrument:

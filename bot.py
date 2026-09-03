@@ -74,18 +74,28 @@ def pnl_in_pips(client, instrument, trade_side, entry_price, pip):
 
 
 def get_legs(client, instrument):
-    """Return (long_pl, short_pl, long_pips, short_pips, entries) or None."""
-    pos = client.position(instrument)
-    if not pos:
+    """Return (legs) for the instrument, built from OPEN TRADES so a fully
+    hedged position (net = 0) is still visible. Returns a dict with 'long' and
+    'short' legs, or None if no trades exist on the instrument."""
+    trades = client.open_trades()
+    inst_trades = [t for t in trades if t["instrument"] == instrument]
+    if not inst_trades:
         return None
-    long_pl = float(pos["long"]["unrealizedPL"]) if pos["long"]["units"] != "0" else 0.0
-    short_pl = float(pos["short"]["unrealizedPL"]) if pos["short"]["units"] != "0" else 0.0
-    return {
-        "long": {"units": int(pos["long"]["units"]), "pl": long_pl,
-                 "entry": float(pos["long"]["averagePrice"] or 0)},
-        "short": {"units": int(pos["short"]["units"]), "pl": short_pl,
-                  "entry": float(pos["short"]["averagePrice"] or 0)},
-    }
+
+    longs = [t for t in inst_trades if int(t["currentUnits"]) > 0]
+    shorts = [t for t in inst_trades if int(t["currentUnits"]) < 0]
+
+    def agg(legs_list):
+        if not legs_list:
+            return {"units": 0, "pl": 0.0, "entry": 0.0}
+        units = sum(int(t["currentUnits"]) for t in legs_list)
+        # volume-weighted average entry price
+        vol = sum(abs(int(t["currentUnits"])) for t in legs_list)
+        entry = sum(float(t["price"]) * abs(int(t["currentUnits"])) for t in legs_list) / vol if vol else 0.0
+        pl = sum(float(t["unrealizedPL"]) for t in legs_list)
+        return {"units": units, "pl": pl, "entry": entry}
+
+    return {"long": agg(longs), "short": agg(shorts)}
 
 
 def main():
@@ -162,13 +172,27 @@ def main():
 
             # --- flip decision (hedge mode) ---------------------------------
             if legs and config.ENTRY_MODE == "hedge":
-                long_pips = pnl_in_pips(client, instr, "long", legs["long"]["entry"], pip)
-                short_pips = pnl_in_pips(client, instr, "short", legs["short"]["entry"], pip)
-                head += f"long_pips={long_pips:+.1f} short_pips={short_pips:+.1f}"
+                # Only consider legs that actually hold a position.
+                long_units = abs(legs["long"]["units"])
+                short_units = abs(legs["short"]["units"])
+
+                long_pips = pnl_in_pips(client, instr, "long", legs["long"]["entry"], pip) if long_units else 0.0
+                short_pips = pnl_in_pips(client, instr, "short", legs["short"]["entry"], pip) if short_units else 0.0
+                if long_units and short_units:
+                    head += f"long_pips={long_pips:+.1f} short_pips={short_pips:+.1f}"
 
                 # The losing side is the one whose pip P&L is more negative.
-                losing_side = "short" if long_pips >= short_pips else "long"
-                losing_pips = short_pips if losing_side == "short" else long_pips
+                # Ignore a side with no position so we don't flip into nothing.
+                candidates = []
+                if long_units:
+                    candidates.append(("long", long_pips))
+                if short_units:
+                    candidates.append(("short", short_pips))
+
+                if len(candidates) == 2:
+                    losing_side, losing_pips = min(candidates, key=lambda c: c[1])
+                else:
+                    losing_side, losing_pips = candidates[0]
 
                 if losing_pips <= -config.MIN_POSITION_SHIFT:
                     log.info(f"  FLIP: {losing_side} is losing ({losing_pips:+.1f}p). "
@@ -222,18 +246,22 @@ def main():
 
 
 def _close_all(client, instrument):
-    """Safely flatten any open position on the instrument."""
+    """Safely flatten any open position on the instrument, using OPEN TRADES
+    (the net position endpoint hides a full hedge)."""
     try:
-        pos = client.position(instrument)
-        if pos:
-            if pos["long"]["units"] != "0":
-                client.close_position(instrument, "long", "ALL")
-                log.info("Closed long leg.")
-            if pos["short"]["units"] != "0":
-                client.close_position(instrument, "short", "ALL")
-                log.info("Closed short leg.")
-        else:
+        trades = client.open_trades()
+        inst_trades = [t for t in trades if t["instrument"] == instrument]
+        if not inst_trades:
             log.info("No open position to close.")
+            return
+        longs = sum(int(t["currentUnits"]) for t in inst_trades if int(t["currentUnits"]) > 0)
+        shorts = sum(int(t["currentUnits"]) for t in inst_trades if int(t["currentUnits"]) < 0)
+        if longs:
+            client.close_position(instrument, "long", "ALL")
+            log.info("Closed long leg.")
+        if shorts:
+            client.close_position(instrument, "short", "ALL")
+            log.info("Closed short leg.")
     except Exception as e:
         log.error(f"close_all error: {e}")
 
