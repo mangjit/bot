@@ -22,6 +22,9 @@ import logging
 import os
 import sys
 import time
+import urllib.parse
+import urllib.request
+from collections import defaultdict
 from datetime import datetime
 
 from config import config
@@ -43,6 +46,77 @@ logging.basicConfig(
 log = logging.getLogger("flipbot")
 
 FLIPS = []  # history of flips for the dashboard
+
+
+# --- Telegram notifications (best-effort; fail silently) ------------------- #
+_tg_sent = set()  # dedupe toggle stop/start notifications
+
+
+def tg_send(text):
+    """Send a Telegram notification. Uses the chat_id recorded in CONTROL_FILE
+    (written by the Telegram daemon), or the ALLOWED_USERS allowlist."""
+    if not config.TELEGRAM_TOKEN:
+        return
+    chat_id = None
+    try:
+        with open(config.CONTROL_FILE) as f:
+            chat_id = json.load(f).get("chat_id")
+    except Exception:
+        pass
+    targets = []
+    if chat_id is not None:
+        targets = [chat_id]
+    try:
+        targets += [int(x) for x in config.ALLOWED_USERS.split(",") if x.strip()]
+    except Exception:
+        pass
+    targets = list(dict.fromkeys(targets))  # dedupe
+    for uid in targets:
+        try:
+            body = json.dumps({"chat_id": uid, "text": text}).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/sendMessage",
+                data=body, headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=8)
+        except Exception:
+            continue
+
+
+def notify_once(key, text):
+    """Send text to Telegram at most once per key (e.g. per stop reason)."""
+    if key in _tg_sent:
+        return
+    _tg_sent.add(key)
+    tg_send(text)
+
+
+# --- control file (written by the Telegram bot) ---------------------------- #
+def read_control():
+    """Read dynamic settings from CONTROL_FILE, or return defaults."""
+    try:
+        with open(config.CONTROL_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return defaultdict(dict)
+
+
+def apply_control(control):
+    """Apply live settings from Telegram onto the running config."""
+    if "profit" in control:
+        config.PROFIT_TARGET = float(control["profit"])
+    if "loss" in control:
+        config.MAX_LOSS = float(control["loss"])
+    if "risk" in control:
+        config.STARTING_BALANCE = float(control["risk"])
+    if "units" in control:
+        config.UNITS = int(control["units"])
+    return control
+
+
+def should_stop(control):
+    """Return True if Telegram has requested a graceful /stop."""
+    return control.get("stop", False)
 
 
 def write_state(**kv):
@@ -142,9 +216,11 @@ def main():
     iterations = 0
     peak_pnl = 0.0  # highest cumulative profit reached (drives the growing risk budget)
     log.info("Running. Ctrl-C to stop.")
+    notify_once("started", f"🟢 Flip Bot STARTED on {instr} (mode={config.ENTRY_MODE}).")
     try:
         while True:
             iterations += 1
+
             summary = client.account_summary()
             balance = float(summary["balance"])
             unrealized = float(summary["unrealizedPL"])
@@ -153,6 +229,16 @@ def main():
             pl_pct = (pnl / config.STARTING_BALANCE) * 100.0 if config.STARTING_BALANCE else 0
 
             px = client.price(instr)
+
+            # --- apply live Telegram settings and check for /stop -----------
+            control = read_control()
+            apply_control(control)
+            if should_stop(control):
+                log.info("Telegram requested STOP. Closing positions.")
+                _close_all(client, instr)
+                write_state(running=False, reason="telegram-stop", exit_pnl=round(pnl, 4))
+                notify_once("tgstop", f"🛑 Flip Bot STOPPED via Telegram on {instr}.")
+                break
 
             # Compounding risk budget: $1 + peak profit, capped at MAX_LOSS.
             peak_pnl = max(peak_pnl, pnl)
@@ -163,12 +249,17 @@ def main():
                 log.info(f"PROFIT TARGET HIT: banked ${pnl:.4f} (peak ${peak_pnl:.4f}). Closing and stopping.")
                 _close_all(client, instr)
                 write_state(running=False, reason="profit-target", exit_pnl=round(pnl, 4))
+                notify_once("profit-target",
+                            f"💰 PROFIT TARGET HIT: banked ${pnl:.2f} on {instr}. Closed & stopped.")
                 break
             if pnl <= -risk_budget:
                 log.info(f"LOSS CAP HIT: net P&L ${pnl:.4f} reached the growing "
                          f"risk budget (-${risk_budget:.2f}, peak profit ${peak_pnl:.2f}). Closing and stopping.")
                 _close_all(client, instr)
                 write_state(running=False, reason="loss-cap", exit_pnl=round(pnl, 4))
+                notify_once("loss-cap",
+                            f"⛔ LOSS CAP HIT: net P&L ${pnl:.2f} on {instr} hit the risk budget. "
+                            f"Closed & stopped to protect the account.")
                 break
             if config.STOP_AFTER_ITERATIONS and iterations >= config.STOP_AFTER_ITERATIONS:
                 log.info(f"Reached STOP_AFTER_ITERATIONS={config.STOP_AFTER_ITERATIONS}. Stopping.")
@@ -276,6 +367,8 @@ def _run_straddle_tick(client, instr, px, pip):
             "price": px["mid"],
             "pips": round(pips, 1),
         })
+        tg_send(f"🔄 FLIP on {instr}: closed {side} ({pips:+.1f}p), opened opposite at "
+                f"{px['mid']:.5f}.")
 
 
 def _run_hedge_tick(client, instr, px, pip):
@@ -315,6 +408,8 @@ def _run_hedge_tick(client, instr, px, pip):
             "price": px["mid"],
             "pips": round(losing_pips, 1),
         })
+        tg_send(f"🔄 FLIP on {instr}: closed losing {losing_side} ({losing_pips:+.1f}p), "
+                f"re-opened at {px['mid']:.5f}.")
 
 
 def _close_all(client, instrument):

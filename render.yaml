@@ -2,12 +2,15 @@
 # Deploy from the Render dashboard (New -> Blueprint) pointing at this repo,
 # or paste this file's content into your repo and use "Blueprints".
 #
-# Two services:
+# Three services:
 #   * flip-bot-trader     -> BACKGROUND WORKER running bot.py (24/7, free)
 #   * flip-bot-dashboard  -> WEB SERVICE running app.py (free dashboard)
+#   * flip-bot-telegram   -> BACKGROUND WORKER running telegram_bot.py (free)
 #
-# Secrets (OANDA_API_TOKEN, OANDA_ACCOUNT_ID) are set in the Render dashboard
-# under each service's "Environment" tab; sync: false means you fill them in.
+# Secrets (OANDA_API_TOKEN, OANDA_ACCOUNT_ID, TELEGRAM_TOKEN) are set in the
+# Render dashboard under each service's "Environment" tab; sync: false means
+# you fill them in. The trader and telegram services need the OANDA_* and
+# TELEGRAM_* vars; the dashboard only needs OANDA_*.
 services:
   - type: worker
     name: flip-bot-trader
@@ -20,6 +23,10 @@ services:
         sync: false
       - key: OANDA_ACCOUNT_ID
         sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: ALLOWED_USERS
+        value: ""
       - key: OANDA_ENV
         value: practice
       - key: OANDA_INSTRUMENT
@@ -38,6 +45,26 @@ services:
         value: "15"
       - key: POLL_INTERVAL
         value: "5"
+
+  - type: worker
+    name: flip-bot-telegram
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python telegram_bot.py
+    envVars:
+      - key: OANDA_API_TOKEN
+        sync: false
+      - key: OANDA_ACCOUNT_ID
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: ALLOWED_USERS
+        value: ""
+      - key: OANDA_ENV
+        value: practice
+      - key: OANDA_INSTRUMENT
+        value: EUR_USD
 
   - type: web
     name: flip-bot-dashboard

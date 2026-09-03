@@ -66,11 +66,20 @@ class Config:
     MIN_POSITION_SHIFT: float = float(_env("MIN_POSITION_SHIFT", "10"))  # pips a side must gain before we declare it "the winner"
     STOP_AFTER_ITERATIONS: int = int(_env("STOP_AFTER_ITERATIONS", "0"))  # 0 = run until target/loss/hand-stop
 
+    # ---- Telegram ----------------------------------------------------------
+    # Bot token from @BotFather. Optional - Telegram control is disabled if unset.
+    TELEGRAM_TOKEN: str = _env("TELEGRAM_TOKEN")
+    # Comma-separated list of Telegram user IDs allowed to control the bot.
+    # Leave empty to allow anyone with the token to control it (not recommended).
+    ALLOWED_USERS: str = _env("ALLOWED_USERS", "")
+
     # ---- Diagnostics ------------------------------------------------------
     VERBOSE: bool = _env("VERBOSE", "1") == "1"
     LOG_FILE: str = _env("LOG_FILE", "flip_bot.log")
     # JSON file the web dashboard reads for live results.
     STATE_FILE: str = _env("STATE_FILE", "state.json")
+    # JSON file the Telegram bot writes live commands/settings to.
+    CONTROL_FILE: str = _env("CONTROL_FILE", "control.json")
 
     @property
     def ticks_to_pips(self) -> float:
