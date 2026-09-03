@@ -1,0 +1,7 @@
+# Never commit secrets or runtime state
+.env
+*.log
+state.json
+__pycache__/
+*.pyc
+.DS_Store

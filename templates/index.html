@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OANDA Flip Bot — Dashboard</title>
+<style>
+  :root {
+    --bg:#0e1117; --card:#161b26; --card2:#1c2333; --line:#252e42;
+    --text:#e6e9ef; --muted:#8a94a8; --green:#2ecc71; --red:#ff5566;
+    --accent:#4da3ff; --yellow:#ffcf6b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:14px 22px; background:var(--card); border-bottom:1px solid var(--line);
+           position:sticky; top:0; z-index:10; flex-wrap:wrap; gap:10px; }
+  header .brand { font-weight:700; font-size:17px; letter-spacing:.3px; }
+  header .brand span { color:var(--accent); }
+  .badge { padding:4px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .badge.live { background:rgba(46,204,113,.15); color:var(--green); }
+  .badge.demo { background:rgba(255,207,107,.15); color:var(--yellow); }
+  .badge.stop { background:rgba(255,85,102,.15); color:var(--red); }
+  .badge.run { background:rgba(77,163,255,.15); color:var(--accent); }
+
+  main { max-width:1280px; margin:0 auto; padding:18px 22px 60px; }
+
+  .topbar { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:18px; }
+  .instrument { font-size:22px; font-weight:800; }
+  .pricebox { display:flex; gap:18px; align-items:baseline; }
+  .pricebox .lbl { color:var(--muted); font-size:12px; }
+  .price { font-variant-numeric:tabular-nums; font-size:26px; font-weight:700; }
+  .chg { font-weight:700; }
+  .up { color:var(--green); } .down { color:var(--red); }
+
+  .grid { display:grid; grid-template-columns:1fr 340px; gap:18px; }
+  @media(max-width:960px){ .grid{ grid-template-columns:1fr; } }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .card h3 { margin:0 0 12px; font-size:14px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.6px; }
+
+  .chartcard svg { width:100%; height:auto; display:block; background:var(--card2); border-radius:10px; }
+  .legend { display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:8px; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; }
+  .legend .g { background:var(--green); } .legend .r { background:var(--red); }
+
+  .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  .metric { background:var(--card2); border-radius:12px; padding:14px; text-align:center; }
+  .metric .v { font-size:26px; font-weight:750; font-variant-numeric:tabular-nums; }
+  .metric .t { font-size:12px; color:var(--muted); margin-top:4px; }
+  .metric.profit .v { color:var(--green); } .metric.loss .v { color:var(--red); }
+
+  .progress { height:12px; background:#12151d; border-radius:8px; overflow:hidden; margin-top:8px; }
+  .progress > div { height:100%; }
+  .bar-target { background:linear-gradient(90deg, var(--green), #1fa75a); }
+  .bar-loss { background:linear-gradient(90deg, var(--red), #a51f33); }
+
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th,td { padding:9px 8px; text-align:right; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; text-transform:uppercase; font-size:11px; letter-spacing:.4px; }
+  td.l, th.l { text-align:left; }
+  .plup { color:var(--green); } .pldown { color:var(--red); }
+  .pill { padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; }
+  .pill.long { background:rgba(46,204,113,.15); color:var(--green); }
+  .pill.short { background:rgba(255,85,102,.15); color:var(--red); }
+
+  .controls { display:flex; gap:10px; align-items:center; }
+  button { border:none; border-radius:10px; padding:10px 18px; font-weight:700; cursor:pointer; font-size:14px; }
+  .btn-start { background:var(--green); color:#04240f; }
+  .btn-stop { background:var(--red); color:#2a0407; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .note { color:var(--muted); font-size:12px; margin-top:10px; }
+
+  footer { text-align:center; color:var(--muted); font-size:12px; padding:20px; border-top:1px solid var(--line); margin-top:30px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">OANDA <span>Flip Bot</span> Dashboard</div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <span id="modeBadge" class="badge">…</span>
+    <span id="runBadge" class="badge">…</span>
+  </div>
+</header>
+
+<main>
+  <div class="topbar">
+    <div class="instrument" id="instrument">—</div>
+    <div class="pricebox">
+      <div><span class="lbl">BID</span><div class="price" id="bid">—</div></div>
+      <div><span class="lbl">ASK</span><div class="price" id="ask">—</div></div>
+      <div><span class="lbl">MID / change</span><div class="price" id="mid">—</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Left: chart + metrics -->
+    <div>
+      <div class="card chartcard">
+        <h3>{{ instrument }} — Candles (1m)</h3>
+        <div id="chart"></div>
+        <div class="legend">
+          <span><i class="g"></i>up candle</span>
+          <span><i class="r"></i>down candle</span>
+        </div>
+      </div>
+
+      <div style="height:18px"></div>
+
+      <div class="card">
+        <h3>Bot Results</h3>
+        <div class="metrics" id="metrics">
+          <div class="metric"><div class="v" id="mEquity">—</div><div class="t">Net Equity</div></div>
+          <div class="metric profit"><div class="v" id="mPnl">—</div><div class="t">Unrealized P&amp;L</div></div>
+          <div class="metric"><div class="v" id="mPct">—</div><div class="t">% of $1 budget</div></div>
+        </div>
+        <div style="margin-top:14px;">
+          <div class="note">Profit target</div>
+          <div class="progress"><div class="bar-target" id="pbarT" style="width:0%"></div></div>
+          <div class="note">Safety loss cap</div>
+          <div class="progress"><div class="bar-loss" id="pbarL" style="width:0%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: positions + flips + controls -->
+    <div>
+      <div class="card">
+        <h3>Open Positions</h3>
+        <table id="posTbl">
+          <thead><tr><th class="l">Leg</th><th>Entry</th><th>P/L</th></tr></thead>
+          <tbody><tr><td class="l" colspan="3">—</td></tr></tbody>
+        </table>
+      </div>
+
+      <div style="height:18px"></div>
+
+      <div class="card">
+        <h3>Flip Log</h3>
+        <div id="flips" style="max-height:260px;overflow:auto;font-size:13px;">
+          <div class="note">No flips yet.</div>
+        </div>
+      </div>
+
+      <div style="height:18px"></div>
+
+      <div class="card">
+        <h3>Controls</h3>
+        <div class="controls">
+          <button class="btn-start" id="btnStart">▶ Start bot</button>
+          <button class="btn-stop" id="btnStop" disabled>■ Stop</button>
+        </div>
+        <div class="note" id="ctlMsg">Live mode only.</div>
+        <div class="note" id="cfgNote"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>OANDA Flip Bot demo dashboard — for education/testing. Not financial advice.</footer>
+
+<script>
+const LIVE = {{ 'true' if live else 'false' }};
+const INSTRUMENT = "{{ instrument }}";
+const $ = id => document.getElementById(id);
+let candles = [];
+
+function fmt(x){ return x==null ? '—' : Number(x).toFixed(5); }
+function money(x){ return (x>=0?'+':'') + '$' + Number(x).toFixed(4); }
+function pct(x){ return (x>=0?'+':'') + Number(x).toFixed(2) + '%'; }
+function cls(v){ return v>=0 ? 'up' : 'down'; }
+
+function drawChart(){
+  const c = candles;
+  if(!c || c.length < 2) return;
+  const w = 900, h = 330, padL = 12, padR = 78, padT = 14, padB = 24;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  let lo = Infinity, hi = -Infinity;
+  c.forEach(k => { lo = Math.min(lo, k.low); hi = Math.max(hi, k.high); });
+  const range = (hi - lo) || 1;
+  const y = v => padT + ih - ((v - lo) / range) * ih;
+  const x = i => padL + (i / (c.length - 1)) * iw;
+  const cw = Math.max(1.5, iw / c.length * 0.6);
+
+  let svg = `<rect x="0" y="0" width="${w}" height="${h}" fill="#10141d"/>`;
+  // gridlines
+  for(let g=0; g<=5; g++){
+    const gy = padT + (ih/5)*g;
+    svg += `<line x1="${padL}" y1="${gy}" x2="${w-padR}" y2="${gy}" stroke="#1d2536" stroke-width="1"/>`;
+    const price = hi - (range/5)*g;
+    svg += `<text x="${w-padR+8}" y="${gy+4}" fill="#667089" font-size="11">${price.toFixed(5)}</text>`;
+  }
+  c.forEach((k,i)=>{
+    const up = k.close >= k.open;
+    const col = up ? '#2ecc71' : '#ff5566';
+    if(k.low < k.open) { /* wick */ }
+    svg += `<line x1="${x(i)}" y1="${y(k.high)}" x2="${x(i)}" y2="${y(k.low)}" stroke="${col}" stroke-width="1"/>`;
+    const top = y(Math.max(k.open,k.close)), bot = y(Math.min(k.open,k.close));
+    svg += `<rect x="${x(i)-cw/2}" y="${top}" width="${cw}" height="${Math.max(1.5,bot-top)}" fill="${col}"/>`;
+  });
+  // last price line
+  const last = c[c.length-1].close;
+  svg += `<line x1="${padL}" y1="${y(last)}" x2="${w-padR}" y2="${y(last)}" stroke="#4da3ff" stroke-dasharray="4 3" stroke-width="1"/>`;
+  $('chart').innerHTML = `<svg viewBox="0 0 ${w} ${h}">${svg}</svg>`;
+}
+
+function renderState(st){
+  $('runBadge').textContent = st.running === 'sim' ? 'DEMO SIM' : (st.running ? 'RUNNING' : (st.reason ? 'STOPPED' : 'IDLE'));
+  $('runBadge').className = 'badge ' + (st.running === true ? 'run' : (st.running === 'sim' ? 'demo' : 'stop'));
+  $('mEquity').textContent = money(st.equity);
+  $('mPnl').textContent = money(st.pnl);
+  $('mPnl').className = 'v ' + (st.pnl >= 0 ? 'up' : 'down');
+  $('mPct').textContent = pct(st.pnl_pct);
+  const scaleT = Math.max(st.pnl, 0) / Math.max(1e-6, st.target);
+  const scaleL = Math.max(-st.pnl, 0) / Math.max(1e-6, st.max_loss);
+  $('pbarT').style.width = Math.min(100, scaleT*100) + '%';
+  $('pbarL').style.width = Math.min(100, scaleL*100) + '%';
+
+  // positions
+  const legs = st.legs;
+  let rows = '';
+  if(legs){
+    rows = `<tr><td class="l"><span class="pill long">BUY</span></td><td>${fmt(legs.long.entry)}</td><td class="${legs.long.pl>=0?'plup':'pldown'}">${(legs.long.pl>=0?'+':'')}${legs.long.pl.toFixed(2)}</td></tr>
+            <tr><td class="l"><span class="pill short">SELL</span></td><td>${fmt(legs.short.entry)}</td><td class="${legs.short.pl>=0?'plup':'pldown'}">${(legs.short.pl>=0?'+':'')}${legs.short.pl.toFixed(2)}</td></tr>`;
+  } else {
+    rows = `<tr><td class="l" colspan="3">No open positions</td></tr>`;
+  }
+  $('posTbl').querySelector('tbody').innerHTML = rows;
+
+  // flips
+  const flips = st.flips || [];
+  if(flips.length){
+    $('flips').innerHTML = flips.slice().reverse().map(f =>
+      `<div style="padding:6px 0;border-bottom:1px solid #222b3e;display:flex;justify-content:space-between;">
+        <span><span class="pill ${f.side==='long'?'long':'short'}">${f.side==='long'?'FLIP BUY':'FLIP SELL'}</span></span>
+        <span style="color:var(--muted)">@${fmt(f.price)}</span>
+        <span style="color:var(--muted)">${f.pips?.toFixed(1)}p</span>
+        <span style="color:var(--muted)">${f.time}</span>
+      </div>`).join('');
+  } else {
+    $('flips').innerHTML = '<div class="note">No flips yet.</div>';
+  }
+}
+
+function renderPrice(p){
+  $('bid').textContent = fmt(p.bid);
+  $('ask').textContent = fmt(p.ask);
+  $('mid').textContent = fmt(p.mid);
+  const c0 = candles.length ? candles[candles.length-1].close : null;
+}
+
+async function refresh(){
+  try {
+    const [priceRes, candRes, stateRes] = await Promise.all([
+      fetch('/api/price').then(r=>r.json()),
+      fetch('/api/candles?n=140').then(r=>r.json()),
+      fetch('/api/state').then(r=>r.json()),
+    ]);
+    if(Array.isArray(candRes)) candles = candRes;
+    renderPrice(priceRes);
+    renderState(stateRes);
+    drawChart();
+  } catch(e){ /* server not up yet */ }
+}
+
+async function cfg(){
+  try {
+    const c = await fetch('/api/config').then(r=>r.json());
+    $('instrument').textContent = c.instrument;
+    $('modeBadge').textContent = c.live ? 'LIVE OANDA' : 'DEMO (simulated)';
+    $('modeBadge').className = 'badge ' + (c.live ? 'live' : 'demo');
+    $('cfgNote').textContent = `units=${c.units} offset=${c.offset_pips}p poll=${c.poll_interval}s minShift=${c.min_shift}p target=${money(c.target)} maxLoss=${money(c.max_loss)}`;
+  } catch(e){}
+}
+
+$('btnStart').onclick = async () => {
+  const r = await fetch('/api/start',{method:'POST'}).then(r=>r.json());
+  $('ctlMsg').textContent = r.message;
+};
+$('btnStop').onclick = async () => {
+  const r = await fetch('/api/stop',{method:'POST'}).then(r=>r.json());
+  $('ctlMsg').textContent = r.message;
+};
+
+if(!LIVE){
+  $('btnStart').disabled = true; $('btnStop').disabled = true;
+  $('ctlMsg').textContent = 'DEMO mode — simulated (no OANDA token). Add your token to trade for real.';
+}
+
+cfg();
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

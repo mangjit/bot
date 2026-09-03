@@ -1,0 +1,217 @@
+"""
+OANDA Flip Bot  -  Web dashboard
+--------------------------------
+Serves a live dashboard showing candlesticks, the current price, the bot's
+results (P&L, equity, positions, flips), and Start/Stop controls.
+
+Two data modes:
+  * LIVE  - reads a real OANDA demo account + candles when OANDA_API_TOKEN /
+            OANDA_ACCOUNT_ID are set in the environment / .env.
+  * DEMO  - simulated candles + simulated results, so the UI can be previewed
+            with no token. Enabled automatically when no token is present
+            (or when SIM=1).
+
+Run:      python app.py
+Open:     http://127.0.0.1:5000   (or the live preview URL)
+"""
+
+import json
+import os
+import random
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+
+from flask import Flask, jsonify, render_template, request
+
+from config import config
+
+# --------------------------------------------------------------------------- #
+#  Demo / simulated data (used when no real token is configured)
+# --------------------------------------------------------------------------- #
+SIM_START = 1.08400
+SIM_PRICE = [SIM_START]
+SIM_OHLC = []  # list of dicts: {t,o,h,l,c}
+
+
+def sim_tick():
+    drift = random.gauss(0.000005, 0.00012)
+    SIM_PRICE[0] += drift
+    return SIM_PRICE[0]
+
+
+def build_sim_candles(n=120, step="M1"):
+    """Generate/refresh a plausible candle series as a random walk."""
+    now = time.time()
+    candles = []
+    price = SIM_PRICE[0]
+    # back-fill history
+    history = []
+    for i in range(n):
+        p = price
+        # random walk a bit
+        for _ in range(4):
+            p += random.gauss(0, 0.00006)
+        o, high, low, close = price, max(price, p), min(price, p), p
+        history.append({"t": now - (n - i) * 60, "o": o, "h": high, "l": low, "c": close})
+        price = p
+    SIM_PRICE[0] = price
+    return [{"time": int(c["t"]), "open": round(c["o"], 5), "high": round(c["h"], 5),
+             "low": round(c["l"], 5), "close": round(c["c"], 5)} for c in history]
+
+
+def sim_state():
+    pnl = sum(random.gauss(0.0, 0.02) for _ in range(6))
+    return {
+        "updated": datetime.now().isoformat(timespec="seconds"),
+        "instrument": config.INSTRUMENT,
+        "mode": config.ENTRY_MODE,
+        "running": "sim",
+        "starting_balance": config.STARTING_BALANCE,
+        "target": config.PROFIT_TARGET,
+        "max_loss": config.MAX_LOSS,
+        "equity": round(config.STARTING_BALANCE + pnl, 4),
+        "pnl": round(pnl, 4),
+        "pnl_pct": round(pnl / config.STARTING_BALANCE * 100, 2) if config.STARTING_BALANCE else 0,
+        "iterations": 0,
+        "price": {"bid": round(SIM_PRICE[0] - 0.00008, 5), "ask": round(SIM_PRICE[0] + 0.00008, 5),
+                  "mid": round(SIM_PRICE[0], 5)},
+        "legs": None,
+        "flips": [],
+        "reason": None,
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  OANDA access (live) or None in demo mode
+# --------------------------------------------------------------------------- #
+client = None
+LIVE = bool(config.API_TOKEN and config.ACCOUNT_ID)
+if LIVE:
+    from oanda_client import OandaClient
+    client = OandaClient(config.API_TOKEN, config.ACCOUNT_ID, config.base_url)
+
+app = Flask(__name__)
+
+
+def get_candles(n=120):
+    if client:
+        try:
+            raws = client.candles(config.INSTRUMENT, count=n, granularity="M1")
+            out = []
+            for c in raws:
+                mid = c["mid"]
+                out.append({"time": int(c["time"].replace("-", "")[:13] + "000"),
+                            "open": float(mid["o"]), "high": float(mid["h"]),
+                            "low": float(mid["l"]), "close": float(mid["c"])})
+            return out
+        except Exception as e:
+            return {"error": str(e)}
+    return build_sim_candles(n)
+
+
+def current_price():
+    if client:
+        try:
+            p = client.price(config.INSTRUMENT)
+            return {"bid": p["bid"], "ask": p["ask"], "mid": p["mid"]}
+        except Exception:
+            pass
+    sim_tick()
+    return {"bid": round(SIM_PRICE[0] - 0.00008, 5), "ask": round(SIM_PRICE[0] + 0.00008, 5),
+            "mid": round(SIM_PRICE[0], 5)}
+
+
+def read_state():
+    p = Path(config.STATE_FILE)
+    if p.exists() and p.stat().st_size:
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            pass
+    if not LIVE:
+        return sim_state()
+    return {"running": False, "reason": None, "instrument": config.INSTRUMENT,
+            "message": "Bot not running yet."}
+
+
+# --------------------------------------------------------------------------- #
+#  Bot subprocess control (only meaningful in LIVE mode)
+# --------------------------------------------------------------------------- #
+BOT_PROC = {"p": None}
+
+
+@app.route("/api/start", methods=["POST"])
+def start_bot():
+    if not LIVE:
+        return jsonify({"ok": True, "mode": "sim", "message": "Demo mode - simulated."})
+    if BOT_PROC["p"] and BOT_PROC["p"].poll() is None:
+        return jsonify({"ok": False, "message": "Bot already running."})
+    proc = subprocess.Popen([sys_executable(), "bot.py"],
+                            cwd=os.path.dirname(os.path.abspath(__file__)))
+    BOT_PROC["p"] = proc
+    return jsonify({"ok": True, "message": "Bot started (pid %s)." % proc.pid})
+
+
+@app.route("/api/stop", methods=["POST"])
+def stop_bot():
+    if BOT_PROC["p"] and BOT_PROC["p"].poll() is None:
+        BOT_PROC["p"].terminate()
+        BOT_PROC["p"].wait(timeout=10)
+        return jsonify({"ok": True, "message": "Bot stopped."})
+    return jsonify({"ok": False, "message": "No bot running."})
+
+
+def sys_executable():
+    import sys
+    return sys.executable
+
+
+# --------------------------------------------------------------------------- #
+#  Routes
+# --------------------------------------------------------------------------- #
+@app.route("/")
+def index():
+    return render_template("index.html", instrument=config.INSTRUMENT,
+                           demo=LIVE is None, live=LIVE)
+
+
+@app.route("/api/candles")
+def api_candles():
+    n = int(request.args.get("n", 120))
+    return jsonify(get_candles(n))
+
+
+@app.route("/api/price")
+def api_price():
+    return jsonify(current_price())
+
+
+@app.route("/api/state")
+def api_state():
+    return jsonify(read_state())
+
+
+@app.route("/api/config")
+def api_config():
+    return jsonify({
+        "instrument": config.INSTRUMENT,
+        "mode": config.ENTRY_MODE,
+        "units": config.UNITS,
+        "offset_pips": config.OFFSET_PIPS,
+        "start_balance": config.STARTING_BALANCE,
+        "target": config.PROFIT_TARGET,
+        "max_loss": config.MAX_LOSS,
+        "poll_interval": config.POLL_INTERVAL,
+        "min_shift": config.MIN_POSITION_SHIFT,
+        "live": LIVE,
+    })
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print("\n  OANDA Flip Bot Dashboard")
+    print(f"  mode: {'LIVE' if LIVE else 'DEMO (simulated)'}  instrument: {config.INSTRUMENT}")
+    print(f"  open:  http://127.0.0.1:{port}\n")
+    app.run(host="0.0.0.0", port=port, debug=False)
