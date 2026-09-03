@@ -1,0 +1,57 @@
+# Render blueprint for the OANDA Flip Bot.
+# Deploy from the Render dashboard (New -> Blueprint) pointing at this repo,
+# or paste this file's content into your repo and use "Blueprints".
+#
+# Two services:
+#   * flip-bot-trader     -> BACKGROUND WORKER running bot.py (24/7, free)
+#   * flip-bot-dashboard  -> WEB SERVICE running app.py (free dashboard)
+#
+# Secrets (OANDA_API_TOKEN, OANDA_ACCOUNT_ID) are set in the Render dashboard
+# under each service's "Environment" tab; sync: false means you fill them in.
+services:
+  - type: worker
+    name: flip-bot-trader
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: OANDA_API_TOKEN
+        sync: false
+      - key: OANDA_ACCOUNT_ID
+        sync: false
+      - key: OANDA_ENV
+        value: practice
+      - key: OANDA_INSTRUMENT
+        value: EUR_USD
+      - key: ENTRY_MODE
+        value: straddle
+      - key: STARTING_BALANCE
+        value: "1.00"
+      - key: MAX_LOSS
+        value: "100.00"
+      - key: PROFIT_TARGET
+        value: "100.00"
+      - key: UNITS
+        value: "1000"
+      - key: OFFSET_PIPS
+        value: "15"
+      - key: POLL_INTERVAL
+        value: "5"
+
+  - type: web
+    name: flip-bot-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /
+    envVars:
+      - key: OANDA_API_TOKEN
+        sync: false
+      - key: OANDA_ACCOUNT_ID
+        sync: false
+      - key: OANDA_ENV
+        value: practice
+      - key: OANDA_INSTRUMENT
+        value: EUR_USD

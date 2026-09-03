@@ -132,8 +132,53 @@ def read_state():
             pass
     if not LIVE:
         return sim_state()
+    # LIVE mode, no fresh state file (e.g. bot runs in a separate worker
+    # service on Render). Build a snapshot straight from OANDA.
+    try:
+        return live_oanda_state()
+    except Exception:
+        pass
     return {"running": False, "reason": None, "instrument": config.INSTRUMENT,
             "message": "Bot not running yet."}
+
+
+def live_oanda_state():
+    """Build a live dashboard snapshot directly from OANDA (works when the bot
+    process and the web process are separate instances)."""
+    summary = client.account_summary()
+    equity = float(summary["balance"]) + float(summary["unrealizedPL"])
+    px = client.price(config.INSTRUMENT)
+    trades = client.open_trades()
+    inst = [t for t in trades if t["instrument"] == config.INSTRUMENT]
+    longs = [t for t in inst if int(t["currentUnits"]) > 0]
+    shorts = [t for t in inst if int(t["currentUnits"]) < 0]
+    legs = None
+    if inst:
+        legs = {
+            "long": {"pl": sum(float(t["unrealizedPL"]) for t in longs),
+                     "entry": float(longs[0]["price"]) if longs else 0.0},
+            "short": {"pl": sum(float(t["unrealizedPL"]) for t in shorts),
+                      "entry": float(shorts[0]["price"]) if shorts else 0.0},
+        }
+    return {
+        "updated": datetime.now().isoformat(timespec="seconds"),
+        "instrument": config.INSTRUMENT,
+        "mode": config.ENTRY_MODE,
+        "running": bool(inst),
+        "starting_balance": config.STARTING_BALANCE,
+        "target": config.PROFIT_TARGET,
+        "max_loss": config.MAX_LOSS,
+        "equity": round(equity, 4),
+        "pnl": round(float(summary["unrealizedPL"]), 4),
+        "pnl_pct": round(float(summary["unrealizedPL"]) / config.STARTING_BALANCE * 100, 2)
+        if config.STARTING_BALANCE else 0,
+        "iterations": 0,
+        "price": {"bid": px["bid"], "ask": px["ask"], "mid": px["mid"]},
+        "legs": legs,
+        "flips": [],
+        "reason": None,
+        "source": "oanda-live",
+    }
 
 
 # --------------------------------------------------------------------------- #
