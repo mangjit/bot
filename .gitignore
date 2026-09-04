@@ -5,3 +5,6 @@ state.json
 __pycache__/
 *.pyc
 .DS_Store
+control.json
+state.json
+control.json
