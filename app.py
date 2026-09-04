@@ -25,7 +25,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
-from config import config
+from config import config, reset_runtime, SETTINGS_FILE
 
 # --------------------------------------------------------------------------- #
 #  Demo / simulated data (used when no real token is configured)
@@ -257,6 +257,83 @@ def api_config():
         "min_shift": config.MIN_POSITION_SHIFT,
         "live": LIVE,
     })
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_get_settings():
+    """Return current API/settings (token masked)."""
+    tk = config.API_TOKEN
+    masked = (tk[:4] + "…" + tk[-4:]) if len(tk) > 8 else ("SET" if tk else "")
+    return jsonify({
+        "api_token_set": bool(tk),
+        "api_token_masked": masked,
+        "account_id": config.ACCOUNT_ID,
+        "env": config.ENV,
+        "instrument": config.INSTRUMENT,
+        "entry_mode": config.ENTRY_MODE,
+        "units": config.UNITS,
+        "offset_pips": config.OFFSET_PIPS,
+        "starting_balance": config.STARTING_BALANCE,
+        "max_loss": config.MAX_LOSS,
+        "profit_target": config.PROFIT_TARGET,
+        "poll_interval": config.POLL_INTERVAL,
+        "min_shift": config.MIN_POSITION_SHIFT,
+        "live": LIVE,
+        "settings_file": SETTINGS_FILE,
+    })
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_post_settings():
+    """Save API settings to settings.json so bot.py + app.py pick them up."""
+    data = request.get_json(force=True) or {}
+    allowed = {"API_TOKEN", "ACCOUNT_ID", "ENV", "INSTRUMENT", "ENTRY_MODE",
+               "UNITS", "OFFSET_PIPS", "STARTING_BALANCE", "MAX_LOSS",
+               "PROFIT_TARGET", "POLL_INTERVAL", "MIN_POSITION_SHIFT"}
+    # Load existing so we don't clobber unmentioned keys.
+    try:
+        with open(SETTINGS_FILE) as f:
+            existing = json.load(f)
+    except Exception:
+        existing = {}
+    tok_changed = False
+    for k in allowed:
+        if k in data and data[k] is not None:
+            # If API_TOKEN is the masked placeholder, keep the original.
+            if k == "API_TOKEN":
+                v = str(data[k]).strip()
+                if not v or v.startswith("…") or (config.API_TOKEN and v == (config.API_TOKEN[:4] + "…" + config.API_TOKEN[-4:])):
+                    tok_changed = False
+                    continue
+                tok_changed = True
+                existing["API_TOKEN"] = v
+            else:
+                existing[k] = data[k]
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(existing, f, indent=2)
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"could not write settings: {e}"}), 500
+    reset_runtime()
+    return jsonify({"ok": True, "message": "Settings saved. Restart the bot (Start/Stop) to apply connection changes.",
+                    "token_changed": tok_changed})
+
+
+@app.route("/api/test", methods=["POST"])
+def api_test():
+    """Test the OANDA connection with the CURRENT creds."""
+    if not (config.API_TOKEN and config.ACCOUNT_ID):
+        return jsonify({"ok": False, "message": "No API token / account ID set."})
+    try:
+        c = OandaClient(config.API_TOKEN, config.ACCOUNT_ID, config.base_url)
+        s = c.account_summary()
+        price = c.price(config.INSTRUMENT)
+        return jsonify({"ok": True,
+                        "message": f"Connected to {config.ENV} account {config.ACCOUNT_ID}. "
+                                   f"Balance ${float(s.get('balance',0)):,.2f}, "
+                                   f"{config.INSTRUMENT} mid={price['mid']:.5f}"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"Connection failed: {e}"})
 
 
 @app.route("/api/logs")

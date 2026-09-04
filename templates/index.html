@@ -161,6 +161,61 @@
         <div class="note" id="ctlMsg">Live mode only.</div>
         <div class="note" id="cfgNote"></div>
       </div>
+
+      <div style="height:18px"></div>
+
+      <div class="card">
+        <h3>API Integration</h3>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <div class="note">OANDA API Token</div>
+            <input id="sToken" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);font-family:monospace;" placeholder="paste token (shown masked if set)">
+          </div>
+          <div>
+            <div class="note">Account ID</div>
+            <input id="sAccount" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);font-family:monospace;" placeholder="e.g. 001-1234567-1234567890">
+          </div>
+          <div style="display:flex;gap:10px;">
+            <div style="flex:1">
+              <div class="note">Environment</div>
+              <select id="sEnv" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);">
+                <option value="practice">practice (demo)</option>
+                <option value="trade">trade (live)</option>
+              </select>
+            </div>
+            <div style="flex:1">
+              <div class="note">Instrument</div>
+              <input id="sInstr" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);font-family:monospace;" placeholder="EUR_USD">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <div style="flex:1">
+              <div class="note">Offset pips (entry speed)</div>
+              <input id="sOffset" type="number" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);">
+            </div>
+            <div style="flex:1">
+              <div class="note">Units per trade</div>
+              <input id="sUnits" type="number" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <div style="flex:1">
+              <div class="note">Max loss ($)</div>
+              <input id="sLoss" type="number" step="any" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);">
+            </div>
+            <div style="flex:1">
+              <div class="note">Profit target ($)</div>
+              <input id="sTarget" type="number" step="any" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:#0e1117;color:var(--text);">
+            </div>
+          </div>
+          <div class="controls">
+            <button class="btn-start" id="btnTest" style="background:var(--accent);color:#04122a;">⚡ Test connection</button>
+            <button class="btn-start" id="btnSave" style="background:var(--yellow);color:#2a1e04;">💾 Save settings</button>
+          </div>
+          <div class="note" id="setMsg">—</div>
+          <div class="note" id="setStat"></div>
+        </div>
+      </div>
     </div>
   </div>
 </main>
@@ -351,7 +406,59 @@ function updateControls(){
   else $('ctlMsg').textContent = 'Bot is stopped. Press Start to begin trading.';
 }
 
+// ---- API Integration panel ----
+async function loadSettings(){
+  try {
+    const s = await fetch('/api/settings').then(r=>r.json());
+    $('sAccount').placeholder = s.account_id || 'no account set';
+    $('sInstr').placeholder = s.instrument || 'EUR_USD';
+    $('sEnv').value = s.env || 'practice';
+    if(s.offset_pips!=null) $('sOffset').value = s.offset_pips;
+    if(s.units!=null) $('sUnits').value = s.units;
+    if(s.max_loss!=null) $('sLoss').value = s.max_loss;
+    if(s.profit_target!=null) $('sTarget').value = s.profit_target;
+    if(s.api_token_masked) $('sToken').placeholder = s.api_token_masked + ' (unchanged if blank)';
+    $('setStat').textContent = (s.live ? '🟢 ' : '🔵 ') + 'Connected to ' + s.env + ' · account ' + (s.account_id||'—') + ' · ' + (s.instrument||'—');
+  } catch(e){ console.log('loadSettings', e); }
+}
+
+$('btnTest').onclick = async () => {
+  // Post current fields to a temp save so the test uses them, then test.
+  await saveSettings(true);
+  $('setMsg').textContent = 'Testing connection…';
+  try {
+    const r = await fetch('/api/test',{method:'POST'}).then(x=>x.json());
+    $('setMsg').textContent = (r.ok?'✅ ':'❌ ') + r.message;
+    $('setMsg').style.color = r.ok ? 'var(--green)' : 'var(--red)';
+  } catch(e){ $('setMsg').textContent = 'Test failed: ' + e; }
+};
+
+$('btnSave').onclick = async () => { await saveSettings(false); };
+
+async function saveSettings(silent){
+  const payload = {};
+  const t = $('sToken').value.trim();
+  if(t && !t.includes('…')) payload.API_TOKEN = t;
+  if($('sAccount').value.trim()) payload.ACCOUNT_ID = $('sAccount').value.trim();
+  payload.ENV = $('sEnv').value;
+  if($('sInstr').value.trim()) payload.INSTRUMENT = $('sInstr').value.trim().toUpperCase();
+  if($('sOffset').value !== '') payload.OFFSET_PIPS = parseFloat($('sOffset').value);
+  if($('sUnits').value !== '') payload.UNITS = parseInt($('sUnits').value);
+  if($('sLoss').value !== '') payload.MAX_LOSS = parseFloat($('sLoss').value);
+  if($('sTarget').value !== '') payload.PROFIT_TARGET = parseFloat($('sTarget').value);
+  try {
+    const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json());
+    if(silent){ return r; }
+    $('setMsg').textContent = (r.ok?'✅ ':'❌ ') + r.message;
+    $('setMsg').style.color = r.ok ? 'var(--green)' : 'var(--red)';
+    if(r.ok){ $('sToken').value=''; loadSettings(); cfg(); }
+  } catch(e){
+    if(!silent) $('setMsg').textContent = 'Save failed: '+e;
+  }
+}
+
 cfg();
+loadSettings();
 refresh();
 setInterval(refresh, 3000);
 </script>

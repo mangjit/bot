@@ -7,6 +7,7 @@ matching environment variables / .env file) before running.
 The "$1 test" defaults are intentionally tiny so a bad run can't hurt.
 """
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -88,3 +89,33 @@ class Config:
 
 
 config = Config()
+
+# --------------------------------------------------------------------------- #
+#  Runtime settings override (settings.json)
+# --------------------------------------------------------------------------- #
+# The dashboard "API Integration" panel writes credentials/settings here so you
+# don't have to edit .env or restart the server. If the file exists, its values
+# override the env-var defaults above (for BOTH bot.py and app.py).
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+
+
+def _load_settings_into_config():
+    try:
+        with open(SETTINGS_FILE) as f:
+            s = json.load(f)
+    except Exception:
+        return
+    for key in ("API_TOKEN", "ACCOUNT_ID", "ENV", "INSTRUMENT", "ENTRY_MODE",
+                "STARTING_BALANCE", "MAX_LOSS", "PROFIT_TARGET", "UNITS",
+                "OFFSET_PIPS", "POLL_INTERVAL", "MIN_POSITION_SHIFT",
+                "TELEGRAM_TOKEN", "ALLOWED_USERS"):
+        if key in s and s[key] is not None:
+            setattr(config, key, s[key])
+
+
+def reset_runtime():
+    """Re-load settings.json into the live config (after the dashboard saves)."""
+    _load_settings_into_config()
+
+
+_load_settings_into_config()
