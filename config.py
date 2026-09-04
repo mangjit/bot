@@ -67,6 +67,14 @@ class Config:
     MIN_POSITION_SHIFT: float = float(_env("MIN_POSITION_SHIFT", "10"))  # pips a side must gain before we declare it "the winner"
     STOP_AFTER_ITERATIONS: int = int(_env("STOP_AFTER_ITERATIONS", "0"))  # 0 = run until target/loss/hand-stop
 
+    # ---- Cloud LLM chat (OpenAI-compatible) --------------------------------
+    # API key + base URL for any OpenAI-compatible endpoint (OpenAI, OpenRouter,
+    # Groq, Together, a local Ollama/vLLM, etc.). Used by the dashboard "Chat"
+    # tab to load models and chat. Set in the dashboard or via .env.
+    LLM_API_KEY: str = _env("LLM_API_KEY")
+    LLM_BASE_URL: str = _env("LLM_BASE_URL", "https://api.openai.com/v1")
+    LLM_MODEL: str = _env("LLM_MODEL")
+
     # ---- Telegram ----------------------------------------------------------
     # Bot token from @BotFather. Optional - Telegram control is disabled if unset.
     TELEGRAM_TOKEN: str = _env("TELEGRAM_TOKEN")
@@ -108,7 +116,8 @@ def _load_settings_into_config():
     for key in ("API_TOKEN", "ACCOUNT_ID", "ENV", "INSTRUMENT", "ENTRY_MODE",
                 "STARTING_BALANCE", "MAX_LOSS", "PROFIT_TARGET", "UNITS",
                 "OFFSET_PIPS", "POLL_INTERVAL", "MIN_POSITION_SHIFT",
-                "TELEGRAM_TOKEN", "ALLOWED_USERS"):
+                "TELEGRAM_TOKEN", "ALLOWED_USERS",
+                "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"):
         if key in s and s[key] is not None:
             setattr(config, key, s[key])
 

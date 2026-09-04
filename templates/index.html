@@ -26,6 +26,20 @@
 
   main { max-width:1280px; margin:0 auto; padding:18px 22px 60px; }
 
+  /* tabs */
+  .tabs { display:flex; gap:4px; margin:0 0 18px; border-bottom:1px solid var(--line); }
+  .tab { padding:10px 20px; background:transparent; border:none; color:var(--muted);
+         font-weight:650; cursor:pointer; border-bottom:3px solid transparent; font-size:15px; }
+  .tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .tab:hover { color:var(--text); }
+  .tabpane { display:none; }
+  .tabpane.active { display:block; }
+
+  .inp { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:9px;
+         background:#0e1117; color:var(--text); font-family:monospace; font-size:13px; }
+  .inp:focus { outline:none; border-color:var(--accent); }
+  select.inp { font-family:inherit; }
+
   .topbar { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:18px; }
   .instrument { font-size:22px; font-weight:800; }
   .pricebox { display:flex; gap:18px; align-items:baseline; }
@@ -85,6 +99,12 @@
 </header>
 
 <main>
+  <div class="tabs">
+    <button class="tab active" data-tab="trading">📈 Trading</button>
+    <button class="tab" data-tab="chat">💬 AI Chat</button>
+  </div>
+
+  <div class="tabpane active" id="pane-trading">
   <div class="topbar">
     <div class="instrument" id="instrument">—</div>
     <div class="pricebox">
@@ -218,6 +238,54 @@
       </div>
     </div>
   </div>
+  </div><!-- /pane-trading -->
+
+  <!-- ===================== CHAT TAB ===================== -->
+  <div class="tabpane" id="pane-chat">
+    <div class="grid" style="grid-template-columns:360px 1fr;">
+      <!-- left: connection + models -->
+      <div>
+        <div class="card">
+          <h3>Cloud LLM Connection</h3>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <div class="note">API Key</div>
+              <input id="llmKey" type="password" class="inp" placeholder="sk-..." autocomplete="off">
+            </div>
+            <div>
+              <div class="note">Base URL</div>
+              <input id="llmBase" class="inp" placeholder="https://api.openai.com/v1">
+            </div>
+            <div>
+              <div class="note">Model <span style="color:var(--muted)">(pick from loaded list)</span></div>
+              <select id="llmModel" class="inp"><option value="">— load models —</option></select>
+            </div>
+            <div class="controls">
+              <button class="btn-start" id="llmLoad" style="background:var(--accent);color:#04122a;">🔄 Load models</button>
+              <button class="btn-start" id="llmSave" style="background:var(--yellow);color:#2a1e04;">💾 Save</button>
+            </div>
+            <div class="note" id="llmMsg">—</div>
+            <div class="note" id="llmStat"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- right: chat -->
+      <div>
+        <div class="card">
+          <h3>Chat <span id="llmModelLabel" style="color:var(--muted);font-weight:400;font-size:12px;"></span></h3>
+          <div id="llmChat" style="height:420px;overflow:auto;background:var(--card2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;font-size:14px;line-height:1.55;">
+            <div style="color:var(--muted);text-align:center;margin-top:150px;">Configure the connection, load a model, then start typing below.<br>Works with any OpenAI-compatible endpoint.</div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;">
+            <input id="llmInput" placeholder="Type a message…" style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0e1117;color:var(--text);">
+            <button class="btn-start" id="llmSend">➤ Send</button>
+            <button class="btn-stop" id="llmClear">✕ Clear</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /pane-chat -->
 </main>
 
 <footer>OANDA Flip Bot demo dashboard — for education/testing. Not financial advice.</footer>
@@ -457,8 +525,108 @@ async function saveSettings(silent){
   }
 }
 
+// ---- Tab switching ----
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tabpane').forEach(p=>p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('pane-'+tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ---- Cloud LLM chat ----
+let llmMessages = [];       // [{role, content}] sent to the API
+function pushMsg(role, text){
+  const el = document.getElementById('llmChat');
+  const d = document.createElement('div');
+  d.style.maxWidth = '85%';
+  d.style.padding = '9px 13px';
+  d.style.borderRadius = '12px';
+  d.style.whiteSpace = 'pre-wrap';
+  d.style.wordBreak = 'break-word';
+  d.style.alignSelf = role==='user' ? 'flex-end' : 'flex-start';
+  d.style.background = role==='user' ? 'var(--accent)' : '#222a3d';
+  d.style.color = role==='user' ? '#04122a' : 'var(--text)';
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  return d;
+}
+function llmKeyVal(){ return document.getElementById('llmKey').value.trim(); }
+function llmBaseVal(){ return document.getElementById('llmBase').value.trim(); }
+
+async function loadLLMConfig(){
+  try {
+    const c = await fetch('/api/llm/config').then(r=>r.json());
+    if(c.api_key_masked){ document.getElementById('llmKey').placeholder = c.api_key_masked + ' (kept if blank)'; }
+    if(c.base_url){ document.getElementById('llmBase').value = c.base_url; }
+    if(c.model){ document.getElementById('llmModelLabel').textContent = c.model; }
+  } catch(e){}
+}
+
+async function llmLoadModels(){
+  const msg = document.getElementById('llmMsg');
+  msg.textContent = 'Loading models…';
+  try {
+    const r = await fetch('/api/llm/models',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:llmKeyVal(), base_url:llmBaseVal()})}).then(x=>x.json());
+    if(!r.ok){ msg.textContent='❌ '+ (r.message||'failed'); msg.style.color='var(--red)'; return; }
+    const sel = document.getElementById('llmModel');
+    sel.innerHTML = '';
+    sel.appendChild(new Option('— select model —',''));
+    r.models.forEach(id => sel.appendChild(new Option(id, id)));
+    msg.textContent = '✅ Loaded '+r.models.length+' models';
+    msg.style.color='var(--green)';
+    // auto-select last-used model if present
+    const cfg = await fetch('/api/llm/config').then(x=>x.json());
+    if(cfg.model && r.models.includes(cfg.model)){ sel.value = cfg.model; document.getElementById('llmModelLabel').textContent = cfg.model; }
+  } catch(e){ msg.textContent='❌ '+e; msg.style.color='var(--red)'; }
+}
+
+document.getElementById('llmLoad').onclick = llmLoadModels;
+
+document.getElementById('llmSave').onclick = async () => {
+  try {
+    const payload = {LLM_BASE_URL: llmBaseVal()};
+    if(llmKeyVal()) payload.LLM_API_KEY = llmKeyVal();
+    const m = document.getElementById('llmModel').value;
+    if(m) payload.LLM_MODEL = m;
+    const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json());
+    document.getElementById('llmMsg').textContent = (r.ok?'✅ ':'❌ ')+r.message;
+    document.getElementById('llmMsg').style.color = r.ok?'var(--green)':'var(--red)';
+    loadLLMConfig();
+  } catch(e){ document.getElementById('llmMsg').textContent='❌ '+e; }
+};
+
+async function llmSend(){
+  const input = document.getElementById('llmInput');
+  const model = document.getElementById('llmModel').value;
+  const text = input.value.trim();
+  if(!text) return;
+  if(!model){ document.getElementById('llmMsg').textContent='❌ Load & select a model first.'; document.getElementById('llmMsg').style.color='var(--red)'; return; }
+  document.getElementById('llmModelLabel').textContent = model;
+  input.value='';
+  pushMsg('user', text);
+  llmMessages.push({role:'user', content:text});
+  const typing = pushMsg('assistant','…thinking');
+  try {
+    const r = await fetch('/api/llm/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:llmKeyVal(), base_url:llmBaseVal(), model, messages:llmMessages})}).then(x=>x.json());
+    typing.textContent = r.ok ? r.content : ('❌ '+(r.message||'error'));
+    typing.style.color = r.ok ? 'var(--text)' : 'var(--red)';
+    if(r.ok){ llmMessages.push({role:'assistant', content:r.content}); }
+    else { llmMessages.pop(); } // forget the failed turn
+  } catch(e){ typing.textContent='❌ '+e; typing.style.color='var(--red)'; }
+}
+
+document.getElementById('llmSend').onclick = llmSend;
+document.getElementById('llmInput').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); llmSend(); } });
+document.getElementById('llmClear').onclick = () => { llmMessages=[]; document.getElementById('llmChat').innerHTML=''; };
+
 cfg();
 loadSettings();
+loadLLMConfig();
 refresh();
 setInterval(refresh, 3000);
 </script>

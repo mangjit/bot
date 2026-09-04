@@ -289,7 +289,8 @@ def api_post_settings():
     data = request.get_json(force=True) or {}
     allowed = {"API_TOKEN", "ACCOUNT_ID", "ENV", "INSTRUMENT", "ENTRY_MODE",
                "UNITS", "OFFSET_PIPS", "STARTING_BALANCE", "MAX_LOSS",
-               "PROFIT_TARGET", "POLL_INTERVAL", "MIN_POSITION_SHIFT"}
+               "PROFIT_TARGET", "POLL_INTERVAL", "MIN_POSITION_SHIFT",
+               "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"}
     # Load existing so we don't clobber unmentioned keys.
     try:
         with open(SETTINGS_FILE) as f:
@@ -334,6 +335,102 @@ def api_test():
                                    f"{config.INSTRUMENT} mid={price['mid']:.5f}"})
     except Exception as e:
         return jsonify({"ok": False, "message": f"Connection failed: {e}"})
+
+
+# --------------------------------------------------------------------------- #
+#  Cloud LLM chat (OpenAI-compatible). Works with any base URL + API key.
+# --------------------------------------------------------------------------- #
+import requests as _requests
+
+
+def _norm_url(base):
+    """Normalise a base URL: add missing scheme, trailing /v1, and strip slashes."""
+    b = (base or "").strip().rstrip("/")
+    if not b:
+        b = "https://api.openai.com/v1"
+    if not b.startswith("http"):
+        b = "https://" + b
+    # Ensure it points at the versioned root for /models and /chat/completions.
+    if not b.endswith("/v1") and "/v1/" not in b and b.split("://")[-1].count("/") <= 1:
+        b = b + "/v1"
+    return b
+
+
+def _llm_headers(api_key):
+    h = {"Content-Type": "application/json"}
+    if api_key:
+        h["Authorization"] = "Bearer " + api_key
+    return h
+
+
+def _llm_models(base, api_key):
+    """Fetch the model list from an OpenAI-compatible endpoint."""
+    url = _norm_url(base) + "/models"
+    r = _requests.get(url, headers=_llm_headers(api_key), timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    ids = []
+    # Standard: {"data":[{"id":...}]}. Some proxies vary; be lenient.
+    if isinstance(data, dict) and "data" in data:
+        ids = [m.get("id") for m in data["data"] if m.get("id")]
+    elif isinstance(data, list):
+        ids = [m.get("id") if isinstance(m, dict) else m for m in data]
+    return ids
+
+
+@app.route("/api/llm/models", methods=["POST"])
+def api_llm_models():
+    data = request.get_json(force=True) or {}
+    base = data.get("base_url") or config.LLM_BASE_URL
+    api_key = data.get("api_key") or config.LLM_API_KEY
+    try:
+        ids = _llm_models(base, api_key)
+        return jsonify({"ok": True, "models": ids, "base_url": _norm_url(base)})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 502
+
+
+@app.route("/api/llm/chat", methods=["POST"])
+def api_llm_chat():
+    data = request.get_json(force=True) or {}
+    base = data.get("base_url") or config.LLM_BASE_URL
+    api_key = data.get("api_key") or config.LLM_API_KEY
+    model = data.get("model") or config.LLM_MODEL
+    messages = data.get("messages", [])
+    if not model:
+        return jsonify({"ok": False, "message": "No model selected."}), 400
+    if not messages:
+        return jsonify({"ok": False, "message": "No messages."}), 400
+    try:
+        url = _norm_url(base) + "/chat/completions"
+        payload = {"model": model, "messages": messages, "stream": False}
+        r = _requests.post(url, headers=_llm_headers(api_key), json=payload, timeout=120)
+        if r.status_code >= 400:
+            return jsonify({"ok": False, "message": f"HTTP {r.status_code}: {r.text[:400]}"}), \
+                r.status_code
+        data = r.json()
+        content = ""
+        try:
+            content = data["choices"][0]["message"]["content"] or ""
+        except Exception:
+            content = json.dumps(data)[:2000]
+        # Keep any text until 'reasoning_content' (deepseek-style) is not blocked.
+        return jsonify({"ok": True, "content": content, "model": model,
+                        "usage": data.get("usage")})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 502
+
+
+@app.route("/api/llm/config")
+def api_llm_config():
+    key = config.LLM_API_KEY
+    masked = (key[:4] + "…" + key[-4:]) if len(key) > 8 else ("SET" if key else "")
+    return jsonify({
+        "api_key_set": bool(key),
+        "api_key_masked": masked,
+        "base_url": config.LLM_BASE_URL,
+        "model": config.LLM_MODEL,
+    })
 
 
 @app.route("/api/logs")
