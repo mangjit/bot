@@ -182,35 +182,40 @@ def live_oanda_state():
 
 
 # --------------------------------------------------------------------------- #
-#  Bot subprocess control (only meaningful in LIVE mode)
+#  Bot Start/Stop control (writes control.json, which bot.py + the supervisor
+#  in start.sh read). Works regardless of gunicorn workers since it only
+#  touches a shared file. In demo/sim mode we just echo a message.
 # --------------------------------------------------------------------------- #
-BOT_PROC = {"p": None}
+def write_control(**kv):
+    data = {}
+    try:
+        with open(config.CONTROL_FILE) as f:
+            data = json.load(f)
+    except Exception:
+        pass
+    data.update(kv)
+    try:
+        with open(config.CONTROL_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        return {"ok": False, "message": f"could not write control: {e}"}
+    return {"ok": True, "data": data}
 
 
 @app.route("/api/start", methods=["POST"])
 def start_bot():
     if not LIVE:
         return jsonify({"ok": True, "mode": "sim", "message": "Demo mode - simulated."})
-    if BOT_PROC["p"] and BOT_PROC["p"].poll() is None:
-        return jsonify({"ok": False, "message": "Bot already running."})
-    proc = subprocess.Popen([sys_executable(), "bot.py"],
-                            cwd=os.path.dirname(os.path.abspath(__file__)))
-    BOT_PROC["p"] = proc
-    return jsonify({"ok": True, "message": "Bot started (pid %s)." % proc.pid})
+    write_control(stop=False)
+    return jsonify({"ok": True, "message": "Bot STARTED. Trader running."})
 
 
 @app.route("/api/stop", methods=["POST"])
 def stop_bot():
-    if BOT_PROC["p"] and BOT_PROC["p"].poll() is None:
-        BOT_PROC["p"].terminate()
-        BOT_PROC["p"].wait(timeout=10)
-        return jsonify({"ok": True, "message": "Bot stopped."})
-    return jsonify({"ok": False, "message": "No bot running."})
-
-
-def sys_executable():
-    import sys
-    return sys.executable
+    if not LIVE:
+        return jsonify({"ok": True, "mode": "sim", "message": "Demo mode - simulated."})
+    write_control(stop=True)
+    return jsonify({"ok": True, "message": "Stop requested. Closing positions and halting the trader."})
 
 
 # --------------------------------------------------------------------------- #

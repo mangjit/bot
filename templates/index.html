@@ -212,7 +212,10 @@ function drawChart(){
   $('chart').innerHTML = `<svg viewBox="0 0 ${w} ${h}">${svg}</svg>`;
 }
 
+let lastState = null;
 function renderState(st){
+  lastState = st;
+  if(typeof updateControls === 'function') updateControls();
   $('runBadge').textContent = st.running === 'sim' ? 'DEMO SIM' : (st.running ? 'RUNNING' : (st.reason ? 'STOPPED' : 'IDLE'));
   $('runBadge').className = 'badge ' + (st.running === true ? 'run' : (st.running === 'sim' ? 'demo' : 'stop'));
   $('mEquity').textContent = money(st.equity);
@@ -316,17 +319,36 @@ async function cfg(){
 }
 
 $('btnStart').onclick = async () => {
-  const r = await fetch('/api/start',{method:'POST'}).then(r=>r.json());
-  $('ctlMsg').textContent = r.message;
+  try {
+    const r = await fetch('/api/start',{method:'POST'}).then(r=>r.json());
+    $('ctlMsg').textContent = r.message;
+  } catch(e){ $('ctlMsg').textContent = 'Start failed.'; }
+  updateControls();
 };
 $('btnStop').onclick = async () => {
-  const r = await fetch('/api/stop',{method:'POST'}).then(r=>r.json());
-  $('ctlMsg').textContent = r.message;
+  try {
+    const r = await fetch('/api/stop',{method:'POST'}).then(r=>r.json());
+    $('ctlMsg').textContent = r.message;
+  } catch(e){ $('ctlMsg').textContent = 'Stop failed.'; }
+  updateControls();
 };
 
-if(!LIVE){
-  $('btnStart').disabled = true; $('btnStop').disabled = true;
-  $('ctlMsg').textContent = 'DEMO mode — simulated (no OANDA token). Add your token to trade for real.';
+// Enable/disable Start/Stop based on whether the bot is running.
+// In demo (sim) mode we keep them enabled but they just echo a message.
+function updateControls(){
+  const st = lastState || {};
+  const running = st.running === true;      // LIVE, actively trading
+  const sim = st.running === 'sim';         // demo simulated
+  if(!LIVE){
+    $('btnStart').disabled = false;
+    $('btnStop').disabled = false;
+    $('ctlMsg').textContent = 'DEMO mode — simulated. Add an OANDA token to trade for real.';
+    return;
+  }
+  $('btnStart').disabled = running;
+  $('btnStop').disabled = !running;
+  if(running) $('ctlMsg').textContent = 'Bot is running. Press Stop to close positions and halt.';
+  else $('ctlMsg').textContent = 'Bot is stopped. Press Start to begin trading.';
 }
 
 cfg();
