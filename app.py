@@ -254,6 +254,24 @@ def api_config():
     })
 
 
+@app.route("/api/logs")
+def api_logs():
+    """Return the tail of the bot log (flip_bot.log) for the dashboard Logs panel."""
+    n = int(request.args.get("n", 200))
+    path = config.LOG_FILE
+    lines = []
+    if os.path.exists(path):
+        try:
+            with open(path, "r", errors="replace") as f:
+                all_lines = f.readlines()
+            lines = [ln.rstrip("\n") for ln in all_lines[-n:]]
+        except Exception as e:
+            lines = [f"[log read error] {e}"]
+    else:
+        lines = [f"[log file not found: {path}]"]
+    return jsonify({"log": lines, "path": path})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print("\n  OANDA Flip Bot Dashboard")

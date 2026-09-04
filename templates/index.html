@@ -122,6 +122,13 @@
           <div class="progress"><div class="bar-loss" id="pbarL" style="width:0%"></div></div>
         </div>
       </div>
+
+      <div style="height:18px"></div>
+
+      <div class="card">
+        <h3>Live Logs <span style="color:var(--muted);font-weight:400;font-size:11px;" id="logMeta"></span></h3>
+        <div id="logbox" style="background:var(--card2);border-radius:10px;padding:10px 12px;max-height:260px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;color:#b9c2d6;white-space:pre-wrap;word-break:break-word;"></div>
+      </div>
     </div>
 
     <!-- Right: positions + flips + controls -->
@@ -250,6 +257,39 @@ function renderPrice(p){
   const c0 = candles.length ? candles[candles.length-1].close : null;
 }
 
+let lastLogFingerprint = '';
+
+function renderLogs(lines){
+  if(!lines || !lines.length) return;
+  const fp = lines.length + ':' + (lines[lines.length-1]||'').slice(-40) + ':' + (lines[0]||'').slice(0,20);
+  if(fp === lastLogFingerprint) return;
+  lastLogFingerprint = fp;
+  const el = $('logbox');
+  el.innerHTML = lines.join('\n');
+  // colour-code timestamps/flip/error lines lightly
+  try {
+    el.innerHTML = lines.map(l => {
+      const esc = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      let c = '';
+      if(/ERROR|Traceback|Capacity|400|exception/i.test(l)) c = 'color:#ff5566;';
+      else if(/FLIP/i.test(l)) c = 'color:#ffcf6b;';
+      else if(/TARGET|PROFIT/i.test(l)) c = 'color:#2ecc71;';
+      else if(/LOSS|STOP/i.test(l)) c = 'color:#ff9da8;';
+      else if(/INFO|\[start\]|Connected|Placed/i.test(l)) c = 'color:#4da3ff;';
+      return `<span style="${c}">${esc}</span>`;
+    }).join('\n');
+  } catch(e){ /* keep plain */ }
+  el.scrollTop = el.scrollHeight;
+}
+
+async function fetchLogs(){
+  try {
+    const r = await fetch('/api/logs?n=200').then(x=>x.json());
+    renderLogs(r.log);
+    $('logMeta').textContent = '(' + (r.log ? r.log.length + ' lines' : '') + ')';
+  } catch(e){ /* ignore */ }
+}
+
 async function refresh(){
   try {
     const [priceRes, candRes, stateRes] = await Promise.all([
@@ -262,6 +302,7 @@ async function refresh(){
     renderState(stateRes);
     drawChart();
   } catch(e){ /* server not up yet */ }
+  fetchLogs();
 }
 
 async function cfg(){
