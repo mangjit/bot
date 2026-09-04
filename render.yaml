@@ -1,23 +1,25 @@
-# Render blueprint for the OANDA Flip Bot.
-# Deploy from the Render dashboard (New -> Blueprint) pointing at this repo,
-# or paste this file's content into your repo and use "Blueprints".
+# Render blueprint for the OANDA Flip Bot - ONE service / ONE command.
 #
-# Three services:
-#   * flip-bot-trader     -> BACKGROUND WORKER running bot.py (24/7, free)
-#   * flip-bot-dashboard  -> WEB SERVICE running app.py (free dashboard)
-#   * flip-bot-telegram   -> BACKGROUND WORKER running telegram_bot.py (free)
+# Background Workers are NOT available on Render's free (Hobby) plan, so this
+# runs the trading bot, the Telegram daemon, and the dashboard together in a
+# single free WEB SERVICE via one start command (bash start.sh). Because all
+# three share the same container/filesystem, state.json and control.json are
+# shared, so Telegram (telegram_bot.py) fully controls the live bot (bot.py).
 #
-# Secrets (OANDA_API_TOKEN, OANDA_ACCOUNT_ID, TELEGRAM_TOKEN) are set in the
-# Render dashboard under each service's "Environment" tab; sync: false means
-# you fill them in. The trader and telegram services need the OANDA_* and
-# TELEGRAM_* vars; the dashboard only needs OANDA_*.
+# NOTE: free web services spin down after ~15 min of no HTTP traffic. To keep a
+# bot running 24/7 for free, point a free UptimeRobot monitor at the service URL
+# (ping every 5 min). For a guaranteed always-on loop, use a paid plan or a VM.
+#
+# Secrets (OANDA_API_TOKEN, OANDA_ACCOUNT_ID, TELEGRAM_TOKEN, ALLOWED_USERS)
+# are set in the Render dashboard under this service's "Environment" tab.
 services:
-  - type: worker
-    name: flip-bot-trader
+  - type: web
+    name: flip-bot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: bash start.sh
+    healthCheckPath: /
     envVars:
       - key: OANDA_API_TOKEN
         sync: false
@@ -45,40 +47,3 @@ services:
         value: "15"
       - key: POLL_INTERVAL
         value: "5"
-
-  - type: worker
-    name: flip-bot-telegram
-    runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python telegram_bot.py
-    envVars:
-      - key: OANDA_API_TOKEN
-        sync: false
-      - key: OANDA_ACCOUNT_ID
-        sync: false
-      - key: TELEGRAM_TOKEN
-        sync: false
-      - key: ALLOWED_USERS
-        value: ""
-      - key: OANDA_ENV
-        value: practice
-      - key: OANDA_INSTRUMENT
-        value: EUR_USD
-
-  - type: web
-    name: flip-bot-dashboard
-    runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
-    healthCheckPath: /
-    envVars:
-      - key: OANDA_API_TOKEN
-        sync: false
-      - key: OANDA_ACCOUNT_ID
-        sync: false
-      - key: OANDA_ENV
-        value: practice
-      - key: OANDA_INSTRUMENT
-        value: EUR_USD
