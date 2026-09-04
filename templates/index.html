@@ -277,11 +277,14 @@
           <div id="llmChat" style="height:420px;overflow:auto;background:var(--card2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;font-size:14px;line-height:1.55;">
             <div style="color:var(--muted);text-align:center;margin-top:150px;">Configure the connection, load a model, then start typing below.<br>Works with any OpenAI-compatible endpoint.</div>
           </div>
-          <div style="display:flex;gap:8px;margin-top:10px;">
+          <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
             <input id="llmInput" placeholder="Type a message…" style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#0e1117;color:var(--text);">
+            <button class="btn-start" id="llmAttach" title="Attach an image, PDF, or text file" style="background:var(--card2);color:var(--text);border:1px solid var(--line);">📎</button>
+            <input type="file" id="llmFile" accept="*/*" style="display:none;">
             <button class="btn-start" id="llmSend">➤ Send</button>
             <button class="btn-stop" id="llmClear">✕ Clear</button>
           </div>
+          <div id="llmAttachBar" style="margin-top:8px;"></div>
         </div>
       </div>
     </div>
@@ -537,6 +540,43 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 // ---- Cloud LLM chat ----
 let llmMessages = [];       // [{role, content}] sent to the API
+let pendingAttach = null;    // {type, name, text|data_url, note, size}
+
+function renderAttachBar(){
+  const bar = document.getElementById('llmAttachBar');
+  if(!pendingAttach){
+    bar.innerHTML = '';
+    return;
+  }
+  const tag = pendingAttach.type==='image' ? '🖼️' : (pendingAttach.type==='text' ? '📄' : '📁');
+  const kb = ((pendingAttach.size||0)/1024).toFixed(1);
+  bar.innerHTML = `<div style="display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;">
+    <span>${tag} <b style="font-family:monospace">${pendingAttach.name}</b> <span style="color:var(--muted)">(${kb} KB${pendingAttach.type==='text'? ' · text extracted':''})</span></span>
+    <button id="llmRemoveAttach" style="margin-left:auto;background:transparent;border:none;color:var(--red);cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
+  </div>`;
+  const btn = document.getElementById('llmRemoveAttach');
+  if(btn) btn.onclick = () => { pendingAttach = null; renderAttachBar(); };
+}
+
+document.getElementById('llmAttach').onclick = () => document.getElementById('llmFile').click();
+document.getElementById('llmFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if(!file) return;
+  const msg = document.getElementById('llmMsg');
+  msg.textContent = 'Processing ' + file.name + '…';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch('/api/llm/file', {method:'POST', body:fd}).then(x=>x.json());
+    if(!r.ok){ msg.textContent = '❌ '+(r.message||'failed'); msg.style.color='var(--red)'; return; }
+    pendingAttach = {type:r.type, name:r.name, size:r.size, data_url:r.data_url, text:r.text,
+                     note:r.note, mime:r.mime};
+    renderAttachBar();
+    msg.textContent = (r.note || 'Attached ' + r.name) + ' — send a message to chat about it.';
+    msg.style.color = 'var(--green)';
+  } catch(err){ msg.textContent = '❌ '+err; msg.style.color='var(--red)'; }
+});
 function pushMsg(role, text){
   const el = document.getElementById('llmChat');
   const d = document.createElement('div');
@@ -603,13 +643,38 @@ async function llmSend(){
   const input = document.getElementById('llmInput');
   const model = document.getElementById('llmModel').value;
   const text = input.value.trim();
-  if(!text) return;
+  if(!text && !pendingAttach) return;
   if(!model){ document.getElementById('llmMsg').textContent='❌ Load & select a model first.'; document.getElementById('llmMsg').style.color='var(--red)'; return; }
   document.getElementById('llmModelLabel').textContent = model;
   input.value='';
-  pushMsg('user', text);
-  llmMessages.push({role:'user', content:text});
+
+  // Build the user content (may be a text string or a content array for images).
+  let content, displayText = text;
+  if(pendingAttach && pendingAttach.type === 'image'){
+    content = [];
+    if(text) content.push({type:'text', text});
+    content.push({type:'image_url', image_url:{url: pendingAttach.data_url}});
+  } else {
+    let full = text ? text : '';
+    if(pendingAttach && pendingAttach.text){
+      full = (full ? full + '\n\n' : '') +
+        '=== Attached file: ' + pendingAttach.name + ' ===\n' + pendingAttach.text;
+    } else if(pendingAttach){
+      full = (full ? full + '\n\n' : '') + `[Attached file: ${pendingAttach.name} - ${pendingAttach.note||'see note'}]`;
+    }
+    content = full;
+  }
+
+  // Show a user bubble including the attachment.
+  const attachLabel = pendingAttach ? (pendingAttach.type==='image' ? ' 🖼️'+pendingAttach.name
+                     : (pendingAttach.type==='text' ? ' 📄'+pendingAttach.name
+                     : ' 📁'+pendingAttach.name)) : '';
+  pushMsg('user', (text || text==='' ? text : '') + attachLabel);
+
+  llmMessages.push({role:'user', content});
   const typing = pushMsg('assistant','…thinking');
+  pendingAttach = null;
+  renderAttachBar();
   try {
     const r = await fetch('/api/llm/chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:llmKeyVal(), base_url:llmBaseVal(), model, messages:llmMessages})}).then(x=>x.json());

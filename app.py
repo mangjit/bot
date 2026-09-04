@@ -441,6 +441,86 @@ def health():
                     "live": LIVE, "instrument": config.INSTRUMENT})
 
 
+@app.route("/api/llm/file", methods=["POST"])
+def api_llm_file():
+    """Process an uploaded file so it can be fed to the LLM chat.
+      * images -> base64 data-url (for vision-capable models)
+      * pdf / text / md / json / csv -> extracted text
+      * other -> return the bytes as base64 with a note (may not be readable)
+    """
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "message": "No file provided."}), 400
+    name = f.filename
+    ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+    raw = f.read()
+    size = len(raw)
+    if size > 15 * 1024 * 1024:
+        return jsonify({"ok": False, "message": "File too large (max 15 MB)."}), 400
+
+    import base64 as _b64
+    image_exts = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+    text_exts = {"txt", "md", "markdown", "json", "csv", "log", "py", "js", "html", "yaml", "yml", "xml", "ini", "conf"}
+    pdf_exts = {"pdf"}
+    docx_exts = {"docx"}
+
+    if ext in image_exts:
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "gif": "image/gif", "webp": "image/webp", "bmp": "image/bmp"}[ext]
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(raw))
+            img.verify()
+        except Exception:
+            pass
+        data_url = f"data:{mime};base64," + _b64.b64encode(raw).decode()
+        return jsonify({"ok": True, "type": "image", "mime": mime,
+                        "data_url": data_url, "name": name, "size": size})
+
+    if ext in pdf_exts:
+        text = None
+        try:
+            from pypdf import PdfReader
+            import io
+            reader = PdfReader(io.BytesIO(raw))
+            pages = [p.extract_text() or "" for p in reader.pages]
+            text = "\n\n".join(pages)[:120000]
+        except Exception as e:
+            text = None
+        if text:
+            return jsonify({"ok": True, "type": "text", "name": name, "size": size,
+                            "text": text, "note": f"Extracted text from PDF ({len(text)} chars)."})
+        return jsonify({"ok": True, "type": "pdf", "name": name, "size": size,
+                        "note": "Could not extract text; the PDF is attached as base64 (LLM may not read it)."})
+
+    if ext in docx_exts:
+        text = None
+        try:
+            import io
+            from docx import Document
+            doc = Document(io.BytesIO(raw))
+            text = "\n".join(p.text for p in doc.paragraphs)[:120000]
+        except Exception:
+            text = None
+        if text:
+            return jsonify({"ok": True, "type": "text", "name": name, "size": size,
+                            "text": text, "note": f"Extracted text from docx ({len(text)} chars)."})
+
+    if ext in text_exts:
+        try:
+            text = raw.decode("utf-8", errors="replace")[:120000]
+            return jsonify({"ok": True, "type": "text", "name": name, "size": size,
+                            "text": text, "note": f"Text file ({len(text)} chars)."})
+        except Exception:
+            pass
+
+    # Unknown / binary: send as base64 with a caveat.
+    return jsonify({"ok": True, "type": "binary", "name": name, "size": size,
+                    "data_url": "data:application/octet-stream;base64," + _b64.b64encode(raw).decode(),
+                    "note": "Unknown file type - attached as base64 (most LLMs can't read it). "})
+
+
 @app.route("/api/logs")
 def api_logs():
     """Return the tail of the bot log (flip_bot.log) for the dashboard Logs panel."""
