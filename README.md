@@ -101,3 +101,49 @@ point `OANDA_ENV=trade` at a live account.
 - On a demo account OANDA allows fractional units, so tiny sizes work. On live
   accounts minimum trade size applies (check the pair's contract specs).
 - Never share your API token. It grants access to your account.
+
+---
+
+## Keep-alive / health check (free plan)
+
+A free Render **web service spins down after ~15 min of no HTTP traffic**, which
+would pause the trading bot. Two free ways to keep it alive:
+
+### 1. GitHub Actions cron (recommended, free)
+
+The repo includes `.github/workflows/keepalive.yml`. It pings your
+`/health` endpoint every 3 minutes on GitHub's free runners.
+
+**To enable:** go to your repo → **Settings → Secrets and variables → Actions →
+New repository secret**, add:
+
+| Name | Value |
+|---|---|
+| `RENDER_HEALTH_URL` | `https://<your-service>.onrender.com/health` |
+
+Then the workflow runs automatically (and you can trigger it manually from the
+**Actions** tab). If the ping returns non-200, the run is flagged red so you'll
+notice the service is down.
+
+### 2. UptimeRobot (free, no code)
+
+Create a free monitor at uptimerobot.com pointing at
+`https://<your-service>.onrender.com/health`, interval **5 minutes**. It does
+the same thing externally.
+
+### Local / Cloud Shell pinger
+
+If you run the bot locally or in Cloud Shell, a simple loop works:
+
+```bash
+while true; do curl -sf http://localhost:5000/health >/dev/null && echo "ok $(date)"; sleep 300; done
+```
+
+---
+
+## Note on the single-service (one-command) setup
+
+`start.sh` runs `bot.py` + `telegram_bot.py` + the dashboard together. Because
+they share the container, **if the dashboard spins down, the bot pauses too.**
+So on the free plan the keep-alive above is important to keep the whole stack
+running 24/7. For guaranteed always-on, use a paid Render instance or a VM.

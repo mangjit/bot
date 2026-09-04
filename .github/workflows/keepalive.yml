@@ -1,0 +1,46 @@
+# =============================================================================
+# KEEP-ALIVE health check
+#
+# Render's FREE web service spins down after ~15 minutes of no HTTP traffic,
+# which would pause the trading bot. This GitHub Actions workflow pings the
+# /health endpoint of your Render service every 3 minutes on GitHub's free
+# runners, so the service stays "awake" and the bot keeps running.
+#
+# Setup:
+#   1) Set a repository secret  RENDER_HEALTH_URL  (Settings -> Secrets ->
+#      Actions -> New repository secret) to your Render service URL + /health,
+#      e.g.   https://flip-bot-xxxx.onrender.com/health
+#   2) This workflow automatically runs on the schedule below.
+#   3) You can also trigger it manually from the Actions tab.
+#
+# Optional: point it at UptimeRobot instead if you prefer (also free).
+# =============================================================================
+name: keep-alive
+
+on:
+  schedule:
+    # every 3 minutes (cron uses UTC)
+    - cron: "*/3 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render /health
+        env:
+          URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "::warning::RENDER_HEALTH_URL secret not set. Add it in repo Settings > Secrets > Actions. Skipping."
+            exit 0
+          fi
+          echo "Pinging $URL"
+          HTTP_CODE=$(curl -s -o /tmp/health.json -w "%{http_code}" --max-time 30 "$URL")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/health.json
+          # health check: exit non-zero on non-200 so the run is flagged red
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Health check returned HTTP $HTTP_CODE. Service may be down."
+            exit 1
+          fi

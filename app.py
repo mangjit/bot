@@ -433,6 +433,14 @@ def api_llm_config():
     })
 
 
+@app.route("/health")
+def health():
+    """Simple liveness/health probe. Keep-alive pings hit this so the free
+    Render web service stays awake (and the trading bot keeps running)."""
+    return jsonify({"status": "ok", "ts": datetime.now().isoformat(timespec="seconds"),
+                    "live": LIVE, "instrument": config.INSTRUMENT})
+
+
 @app.route("/api/logs")
 def api_logs():
     """Return the tail of the bot log (flip_bot.log) for the dashboard Logs panel."""
